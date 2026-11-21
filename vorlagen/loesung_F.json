@@ -1,0 +1,70 @@
+{
+  "soll_text": "Gestern haben wir im Untericht einen Versuch mit Wasser und Salz gemacht. Zuerst haben wir das Wasser in einem Becherglas erhizt. Danach haben wir langsm Salz dazugegeben und alles gut umgerürt. Nach einer Weile war das Salz nicht mehr zu sehen, es hatte sich vollstädig gelöst. Als wir die Flüssikeit weiter erwärmt haben, ist das Wasser verdamft. Am Boden blieb eine weiße Schich zurück. Unser Lehrer hat erklärt, dass man so ein Stoffgemisch wieder trenen kann. Das Ergebniss haben wir ins Protokoll geschrieben.",
+  "fehler": [
+    {
+      "id": 1,
+      "kategorie": "R",
+      "falsch": "Untericht",
+      "richtig": "Unterricht"
+    },
+    {
+      "id": 2,
+      "kategorie": "R",
+      "falsch": "erhizt",
+      "richtig": "erhitzt"
+    },
+    {
+      "id": 3,
+      "kategorie": "R",
+      "falsch": "langsm",
+      "richtig": "langsam"
+    },
+    {
+      "id": 4,
+      "kategorie": "R",
+      "falsch": "umgerürt",
+      "richtig": "umgerührt"
+    },
+    {
+      "id": 5,
+      "kategorie": "R",
+      "falsch": "vollstädig",
+      "richtig": "vollständig"
+    },
+    {
+      "id": 6,
+      "kategorie": "R",
+      "falsch": "Flüssikeit",
+      "richtig": "Flüssigkeit"
+    },
+    {
+      "id": 7,
+      "kategorie": "R",
+      "falsch": "verdamft",
+      "richtig": "verdampft"
+    },
+    {
+      "id": 8,
+      "kategorie": "R",
+      "falsch": "Schich",
+      "richtig": "Schicht"
+    },
+    {
+      "id": 9,
+      "kategorie": "R",
+      "falsch": "trenen",
+      "richtig": "trennen"
+    },
+    {
+      "id": 10,
+      "kategorie": "R",
+      "falsch": "Ergebniss",
+      "richtig": "Ergebnis"
+    }
+  ],
+  "fallen": [
+    "Becherglas",
+    "Stoffgemisch",
+    "Protokoll"
+  ]
+}
