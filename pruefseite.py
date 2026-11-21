@@ -156,6 +156,8 @@ def seite():
 def daten():
     ergebnisse = []
     for datei in sorted((WURZEL / "ergebnisse").glob("*/*.json")):
+        if datei.parent.name.startswith("_"):  # Zwischenspeicher, keine Ergebnisse
+            continue
         erg = json.loads(datei.read_text(encoding="utf-8"))
         loesung = loesung_laden(WURZEL, erg["bild"])
         fehler = loesung["fehler"] if loesung else []

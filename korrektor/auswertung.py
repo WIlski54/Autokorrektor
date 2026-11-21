@@ -229,6 +229,8 @@ def alles(wurzel):
     klicks = klicks_laden(wurzel)
     je_verfahren = {}
     for datei in sorted((Path(wurzel) / "ergebnisse").glob("*/*.json")):
+        if datei.parent.name.startswith("_"):  # Zwischenspeicher, keine Ergebnisse
+            continue
         erg = json.loads(datei.read_text(encoding="utf-8"))
         loesung = loesung_laden(wurzel, erg["bild"])
         if loesung is None or erg["bild"].startswith("H_"):

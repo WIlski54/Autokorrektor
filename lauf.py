@@ -12,7 +12,7 @@ from korrektor import ergebnis
 WURZEL = Path(__file__).parent
 # Verfahren -> Eintrag unter [modelle], der gesetzt sein muss
 VERFAHREN = {"gemini": "gemini", "claude": "claude", "gpt": "gpt",
-             "vision_kombi": "vision_analyse"}
+             "vision_kombi": "vision_analyse", "gemini_vision": "gemini"}
 
 
 def main():
