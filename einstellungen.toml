@@ -1,0 +1,19 @@
+# Längste Bildkante in Pixeln, mit der Fotos an die Dienste gehen
+max_kante = 2400
+
+[modelle]
+# Kennungen vor dem ersten Lauf gegen die Anbieterdokumentation prüfen.
+# Ein leerer Eintrag schaltet das Verfahren ab.
+gemini = "gemini-4-hydrogen"
+claude = "claude-fable-5-2"
+gpt = ""
+vision_analyse = "claude-fable-5-2"
+
+[vision]
+# Unter diesem Vertrauenswert gilt ein Wort als unsicher gelesen
+sicherheit_schwelle = 0.6
+
+[schwellen]
+gefunden_min = 0.85
+erfunden_pro_seite_max = 1.0
+platzierung_min = 0.90
