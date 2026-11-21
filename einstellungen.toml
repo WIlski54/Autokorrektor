@@ -4,7 +4,7 @@ max_kante = 2400
 [modelle]
 # Kennungen vor dem ersten Lauf gegen die Anbieterdokumentation prüfen.
 # Ein leerer Eintrag schaltet das Verfahren ab.
-gemini = "gemini-4-hydrogen"
+gemini = "gemini-4-carbon"
 claude = ""
 gpt = "gpt-6.2-sol"
 vision_analyse = "gemini-4-hydrogen"
