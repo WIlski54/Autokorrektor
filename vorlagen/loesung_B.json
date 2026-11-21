@@ -1,0 +1,82 @@
+{
+  "soll_text": "Im Experiment haben wir eine Baterie mit einer Leuchtdiode verbunden. Zu erst haben wir den Pluspol und den Minuspol angeschlossen. Dann haben wir verschiedene Gegenstände zwischen die enden der Kabel gehalten. Bei der Holzkugel hat die Lampe nicht geleuchtet weil Holz den Strom nicht leited. Der Nagel aus Eisen hat den Stromkreis geschloßen und die Diode war an. Das selbe haben wir mit dem Radiergummi der Büroklammer und dem Bleistift gemacht. Am ende haben wir alle Ergebnisse in einer Tabelle aufgeschrieben. Mann kann sagen, das Metalle den Strom leiten und Kunststoffe ihm nicht leiten.",
+  "fehler": [
+    {
+      "id": 1,
+      "kategorie": "R",
+      "falsch": "Baterie",
+      "richtig": "Batterie"
+    },
+    {
+      "id": 2,
+      "kategorie": "R",
+      "falsch": "Zu erst",
+      "richtig": "Zuerst"
+    },
+    {
+      "id": 3,
+      "kategorie": "R",
+      "falsch": "enden",
+      "richtig": "Enden"
+    },
+    {
+      "id": 4,
+      "kategorie": "Z",
+      "falsch": "geleuchtet weil",
+      "richtig": "geleuchtet, weil"
+    },
+    {
+      "id": 5,
+      "kategorie": "R",
+      "falsch": "leited",
+      "richtig": "leitet"
+    },
+    {
+      "id": 6,
+      "kategorie": "R",
+      "falsch": "geschloßen",
+      "richtig": "geschlossen"
+    },
+    {
+      "id": 7,
+      "kategorie": "R",
+      "falsch": "Das selbe",
+      "richtig": "Dasselbe"
+    },
+    {
+      "id": 8,
+      "kategorie": "Z",
+      "falsch": "Radiergummi der",
+      "richtig": "Radiergummi, der"
+    },
+    {
+      "id": 9,
+      "kategorie": "R",
+      "falsch": "ende",
+      "richtig": "Ende"
+    },
+    {
+      "id": 10,
+      "kategorie": "R",
+      "falsch": "Mann",
+      "richtig": "Man"
+    },
+    {
+      "id": 11,
+      "kategorie": "R",
+      "falsch": "sagen, das",
+      "richtig": "sagen, dass"
+    },
+    {
+      "id": 12,
+      "kategorie": "Gr",
+      "falsch": "ihm",
+      "richtig": "ihn"
+    }
+  ],
+  "fallen": [
+    "Leuchtdiode",
+    "Stromkreis",
+    "Büroklammer"
+  ]
+}

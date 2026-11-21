@@ -1,0 +1,89 @@
+{
+  "soll_text": "Die Kurzgeschichte „Der letzte Bus“ handelt von einem Jungen namens Jonas der nachts allein an einer Haltestelle wartet. Zu Beginn erfährt der Leser, das Jonas nach einem Streit mit seinem Vater von zu Hause weg gelaufen ist. Während er wartet setzt sich eine alte Frau neben ihm und beginnt ein Gespräch. Sie erzählt ihm, dass sie als Jugendliche das gleiche getan hat und es bis Heute bereut. Jonas hört zunächst nur wiederwillig zu, doch allmählich wird er nachdenklich. Als der Bus schliesslich kommt steigt er nicht ein. Statt dessen ruft er seinen Vater an und bittet ihn, ihn ab zu holen. Die Geschichte endet damit, dass die beiden schweigend nachhause fahren. Der Autor will zeigen, das ein Gespräch mit einem Fremden manchmal mehr bewirkt als viele Vorwürfe.",
+  "fehler": [
+    {
+      "id": 1,
+      "kategorie": "Z",
+      "falsch": "Jonas der",
+      "richtig": "Jonas, der"
+    },
+    {
+      "id": 2,
+      "kategorie": "R",
+      "falsch": "Leser, das",
+      "richtig": "Leser, dass"
+    },
+    {
+      "id": 3,
+      "kategorie": "R",
+      "falsch": "weg gelaufen",
+      "richtig": "weggelaufen"
+    },
+    {
+      "id": 4,
+      "kategorie": "Z",
+      "falsch": "wartet setzt",
+      "richtig": "wartet, setzt"
+    },
+    {
+      "id": 5,
+      "kategorie": "Gr",
+      "falsch": "ihm",
+      "richtig": "ihn"
+    },
+    {
+      "id": 6,
+      "kategorie": "R",
+      "falsch": "gleiche",
+      "richtig": "Gleiche"
+    },
+    {
+      "id": 7,
+      "kategorie": "R",
+      "falsch": "Heute",
+      "richtig": "heute"
+    },
+    {
+      "id": 8,
+      "kategorie": "R",
+      "falsch": "wiederwillig",
+      "richtig": "widerwillig"
+    },
+    {
+      "id": 9,
+      "kategorie": "R",
+      "falsch": "schliesslich",
+      "richtig": "schließlich"
+    },
+    {
+      "id": 10,
+      "kategorie": "Z",
+      "falsch": "kommt steigt",
+      "richtig": "kommt, steigt"
+    },
+    {
+      "id": 11,
+      "kategorie": "R",
+      "falsch": "Statt dessen",
+      "richtig": "Stattdessen"
+    },
+    {
+      "id": 12,
+      "kategorie": "R",
+      "falsch": "ab zu holen",
+      "richtig": "abzuholen"
+    },
+    {
+      "id": 13,
+      "kategorie": "R",
+      "falsch": "zeigen, das",
+      "richtig": "zeigen, dass"
+    }
+  ],
+  "fallen": [
+    "Kurzgeschichte",
+    "zu Hause",
+    "allmählich",
+    "nachhause"
+  ]
+}

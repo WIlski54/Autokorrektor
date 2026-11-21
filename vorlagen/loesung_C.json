@@ -1,0 +1,95 @@
+{
+  "soll_text": "Viele Schulen diskutieren zurzeit darüber ob Handys im Unterricht verboten werden sollten. Meiner Meinung nach spricht einiges dafür, den die Geräte lenken stark ab. Wer ständig Nachrichten bekommt kann sich kaum auf den Stoff konzentrieren. Außerdem zeigen Studien, das die Leistungen sinken, wenn das Smartphone auf dem Tisch liegt. Anderer seits lassen sich Handys sinnvoll einsetzen, zum Beispiel beim recherchieren oder beim Üben von Vokabeln. Ein generelles Verbot würde uns diese Möglichkeiten weg nehmen. Wichtig ist vorallem, dass klare Regeln gelten an die sich alle halten. Im großen und ganzen halte ich ein Kompromiss für die beste Lösung. Die Lehrkraft entscheidet wann die Geräte benutzt werden dürfen. So lernen wir, verantwortungsvoll mit der Technik um zu gehen, anstatt sie nur heimlich zu benutzen. Letztendlich profitiert davon die ganze Klassengemeinschafft.",
+  "fehler": [
+    {
+      "id": 1,
+      "kategorie": "Z",
+      "falsch": "darüber ob",
+      "richtig": "darüber, ob"
+    },
+    {
+      "id": 2,
+      "kategorie": "R",
+      "falsch": "dafür, den",
+      "richtig": "dafür, denn"
+    },
+    {
+      "id": 3,
+      "kategorie": "Z",
+      "falsch": "bekommt kann",
+      "richtig": "bekommt, kann"
+    },
+    {
+      "id": 4,
+      "kategorie": "R",
+      "falsch": "Studien, das",
+      "richtig": "Studien, dass"
+    },
+    {
+      "id": 5,
+      "kategorie": "R",
+      "falsch": "Anderer seits",
+      "richtig": "Andererseits"
+    },
+    {
+      "id": 6,
+      "kategorie": "R",
+      "falsch": "recherchieren",
+      "richtig": "Recherchieren"
+    },
+    {
+      "id": 7,
+      "kategorie": "R",
+      "falsch": "weg nehmen",
+      "richtig": "wegnehmen"
+    },
+    {
+      "id": 8,
+      "kategorie": "R",
+      "falsch": "vorallem",
+      "richtig": "vor allem"
+    },
+    {
+      "id": 9,
+      "kategorie": "Z",
+      "falsch": "gelten an",
+      "richtig": "gelten, an"
+    },
+    {
+      "id": 10,
+      "kategorie": "R",
+      "falsch": "großen und ganzen",
+      "richtig": "Großen und Ganzen"
+    },
+    {
+      "id": 11,
+      "kategorie": "Gr",
+      "falsch": "ein",
+      "richtig": "einen"
+    },
+    {
+      "id": 12,
+      "kategorie": "Z",
+      "falsch": "entscheidet wann",
+      "richtig": "entscheidet, wann"
+    },
+    {
+      "id": 13,
+      "kategorie": "R",
+      "falsch": "um zu gehen",
+      "richtig": "umzugehen"
+    },
+    {
+      "id": 14,
+      "kategorie": "R",
+      "falsch": "Klassengemeinschafft",
+      "richtig": "Klassengemeinschaft"
+    }
+  ],
+  "fallen": [
+    "zurzeit",
+    "Smartphone",
+    "Kompromiss",
+    "verantwortungsvoll"
+  ]
+}
