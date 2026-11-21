@@ -8,12 +8,22 @@ from korrektor.ergebnis import ergebnis, fund
 
 
 def aus_antwort(roh, bildgroesse, umrechnen):
-    funde = []
-    for nr, f in enumerate(roh.get("funde", []), 1):
-        funde.append(fund(nr, f["kategorie"], f.get("gelesen", ""), f.get("vorschlag", ""),
-                          f.get("anker_typ", "wort"), umrechnen(f["rahmen"], bildgroesse),
-                          bildgroesse, f.get("sicherheit")))
-    return roh.get("transkription", ""), funde
+    """Gibt (Transkription, Funde, Zahl verworfener Funde) zurück.
+
+    Ein einzelner kaputter Fund (fehlender oder falscher Rahmen) wird verworfen und
+    gezählt, statt die ganze Seite ausfallen zu lassen.
+    """
+    funde, verworfen = [], 0
+    for f in roh.get("funde") or []:
+        try:
+            typ = "luecke" if f.get("anker_typ") == "luecke" else "wort"
+            funde.append(fund(len(funde) + 1, f.get("kategorie"), f.get("gelesen"),
+                              f.get("vorschlag"), typ,
+                              umrechnen([float(v) for v in f["rahmen"]], bildgroesse),
+                              bildgroesse, f.get("sicherheit")))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            verworfen += 1
+    return roh.get("transkription"), funde, verworfen
 
 
 def ausfuehren(bildpfad, name, modell, rahmenhinweis, umrechnen, fragen, max_kante):
@@ -26,9 +36,9 @@ def ausfuehren(bildpfad, name, modell, rahmenhinweis, umrechnen, fragen, max_kan
     for _ in range(2):
         try:
             text, nutzung = fragen(anweisung(rahmenhinweis), daten, modell)
-            transkription, funde = aus_antwort(json_lesen(text), groesse, umrechnen)
+            transkription, funde, verworfen = aus_antwort(json_lesen(text), groesse, umrechnen)
             return ergebnis(bildpfad.name, name, modelle, groesse, transkription, funde,
-                            time.time() - start, nutzung)
+                            time.time() - start, nutzung, verworfen=verworfen)
         except Exception as fehler:
             meldung = f"{type(fehler).__name__}: {fehler}"
     return ergebnis(bildpfad.name, name, modelle, groesse, dauer_s=time.time() - start,

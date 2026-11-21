@@ -18,8 +18,11 @@ def main():
     for name, teil in auswertung.items():
         for bildname, fund in teil["erfundene"]:
             ziel = ordner / f"{name}_{Path(bildname).stem}_{fund['id']}.jpg"
-            ziel.write_bytes(bild.ausschnitt(WURZEL / "fotos" / bildname,
-                                             fund["anker"]["rahmen"], rand=0.5))
+            try:
+                ziel.write_bytes(bild.ausschnitt(WURZEL / "fotos" / bildname,
+                                                 fund["anker"]["rahmen"], rand=0.5))
+            except (OSError, ValueError):  # Foto fehlt oder Rahmen unbrauchbar
+                continue
             ausschnitte[(name, bildname, fund["id"])] = f"bericht_bilder/{ziel.name}"
     (WURZEL / "bericht.html").write_text(html(auswertung, einst["schwellen"], ausschnitte),
                                          encoding="utf-8")

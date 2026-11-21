@@ -1,5 +1,5 @@
 {
-  "soll_text": "Am Anfang war nichts da, überhaupt nichts. Doch plözlich gab es einen riesigen Knall und es wurde unvorstellbar hell. Langsam wurde das Licht dunkler, aber man hatte das Gefühl dass es nie ganz weg ging. In dem Gas schwebten winzige Teilchen, die man mit einem normalen Auge nicht sehen konnte. Damit wir nicht immer winzige Teilchen sagen müssen nennen wir sie einfach Atome. Das kleinste Atom heißt Wasserstoff. Irgendwan hatte das licht eine runde Form angenommen und wir können es Sonne nennen. Zwei Wasserstoff-Atome gerieten in den Sonnenkern. Sie merkten nur noch ganz kurz, das sie zusammen gequetscht wurden. Unter viel Druck und Hitze verschmolzten sie zu einem neuem Atom. Am besten nennen wir es Helium. Alle anderen Atome wunderten sich und eines flüsterte: „Wo sind den die beiden hin?“ Wahrscheinlich sind sie mit einander verschmolzen.",
+  "soll_text": "Am Anfang war nichts da, überhaupt nichts. Doch plözlich gab es einen riesigen Knall und es wurde unvorstellbar hell. Langsam wurde das Licht dunkler, aber man hatte das Gefühl dass es nie ganz weg ging. In dem Gas schwebten winzige Teilchen, die man mit einem normalen Auge nicht sehen konnte. Damit wir nicht immer „winzige Teilchen“ sagen müssen nennen wir sie einfach Atome. Das kleinste Atom heißt Wasserstoff. Irgendwan hatte das licht eine runde Form angenommen und wir können es Sonne nennen. Zwei Wasserstoffatome gerieten in den Sonnenkern. Sie merkten nur noch ganz kurz, das sie zusammen gequetscht wurden. Unter viel Druck und Hitze verschmolzten sie zu einem neuem Atom. Am besten nennen wir es Helium. Alle anderen Atome wunderten sich und eines flüsterte: „Wo sind den die beiden hin?“ Wahrscheinlich sind sie mit einander verschmolzen.",
   "fehler": [
     {
       "id": 1,
@@ -64,8 +64,8 @@
     {
       "id": 11,
       "kategorie": "R",
-      "falsch": "den",
-      "richtig": "denn"
+      "falsch": "sind den",
+      "richtig": "sind denn"
     },
     {
       "id": 12,
@@ -76,7 +76,7 @@
   ],
   "fallen": [
     "unvorstellbar",
-    "Wasserstoff-Atome",
+    "Wasserstoffatome",
     "Helium",
     "Wahrscheinlich"
   ]

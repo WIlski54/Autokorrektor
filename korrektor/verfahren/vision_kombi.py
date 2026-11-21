@@ -54,19 +54,22 @@ def nummerierter_text(woerter):
 
 def funde_bauen(roh, woerter, bildgroesse):
     funde = []
-    for f in roh.get("funde", []):
-        von = int(f["wort_von"])
-        bis = int(f.get("wort_bis", von))
+    for f in roh.get("funde") or []:
+        try:
+            von = int(f["wort_von"])
+            bis = int(f.get("wort_bis") if f.get("wort_bis") is not None else von)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
         if not 0 <= von <= bis < len(woerter):
             continue
-        typ = f.get("anker_typ", "wort")
+        typ = "luecke" if f.get("anker_typ") == "luecke" else "wort"
         if typ == "luecke":
             rechts = woerter[von + 1]["rahmen"] if von + 1 < len(woerter) else None
             rahmen = luecke(woerter[von]["rahmen"], rechts)
         else:
             rahmen = vereinigen([wort["rahmen"] for wort in woerter[von:bis + 1]])
-        eintrag = fund(len(funde) + 1, f["kategorie"], f.get("gelesen", ""),
-                       f.get("vorschlag", ""), typ, rahmen, bildgroesse, f.get("sicherheit"))
+        eintrag = fund(len(funde) + 1, f.get("kategorie"), f.get("gelesen"),
+                       f.get("vorschlag"), typ, rahmen, bildgroesse, f.get("sicherheit"))
         eintrag["woerter"] = [von, bis]
         funde.append(eintrag)
     return funde

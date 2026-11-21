@@ -52,3 +52,18 @@ def test_ausfall_nach_zwei_fehlversuchen(tmp_path):
     erg = allein.ausfuehren(_foto(tmp_path), "gemini", "m", "h", anteil_zu_pixel, fragen, 2400)
     assert erg["funde"] == []
     assert "ValueError" in erg["fehlermeldung"]
+
+
+def test_kaputter_fund_wird_verworfen_statt_seite_ausfallen_zu_lassen(tmp_path):
+    antwort = json.dumps({"transkription": None, "funde": [
+        {"kategorie": "Grammatik", "gelesen": None, "vorschlag": "x", "rahmen": [0.1, 0.1, 0.1, 0.1]},
+        {"kategorie": "R", "gelesen": "a", "vorschlag": "b", "rahmen": [1, 2, 3]},
+        {"kategorie": "R", "gelesen": "a", "vorschlag": "b"}]})
+
+    def fragen(anweisung, jpeg, modell):
+        return antwort, {"eingabe": 1, "ausgabe": 1}
+
+    erg = allein.ausfuehren(_foto(tmp_path), "gpt", "m", "h", anteil_zu_pixel, fragen, 2400)
+    assert erg["fehlermeldung"] is None and erg["verworfen"] == 2
+    assert [(f["id"], f["kategorie"], f["gelesen"]) for f in erg["funde"]] == [(1, "Gr", "")]
+    assert erg["transkription"] == ""

@@ -1,7 +1,7 @@
 from korrektor import bericht
 
 SUMME = {"seiten": 2, "fehler_gesamt": 20, "gefunden": 18, "erfunden": 2, "lesetreu": 12,
-         "lesetreue_gesamt": 16, "fallen": 1, "fallen_gesamt": 8, "platz_sitzt": 17,
+         "lesetreue_gesamt": 16, "dubletten": 0, "verworfen": 0, "fallen": 1, "fallen_gesamt": 8, "platz_sitzt": 17,
          "platz_geprueft": 18, "platz_offen": 0, "ausfall": 0, "dauer_s": 14.0,
          "eingabe": 4000, "ausgabe": 900,
          "nach_kategorie": {"R": [10, 12], "Z": [6, 6], "Gr": [2, 2]}}

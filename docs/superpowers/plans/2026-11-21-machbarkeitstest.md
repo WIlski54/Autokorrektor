@@ -10,6 +10,8 @@
 
 **Spezifikation:** `docs/superpowers/specs/2026-11-21-machbarkeitstest-design.md`
 
+> **Stand nach der Code-Durchsicht:** Tasks 1–8, 10 und 12–15 (Step 1–2) sind umgesetzt. Der Code weicht an einigen Stellen vom hier abgedruckten ab: Zuordnung in `korrektor/auswertung.py` (Kernvergleich, Mehrfachabdeckung, Dubletten), Klickfeld `urteil` statt `echt` auf der Prüfseite, robustere Verarbeitung kaputter Modellantworten, angepasste Testtexte A, B und D. Maßgeblich ist der Code im Repository. Offen sind Task 8 Step 1 (Modellkennungen), Task 9, Task 11 und Task 15 Step 3–5. In Task 11 gibt `aus_antwort`/`funde_bauen` unverändert eine Fundliste zurück; die dort abgedruckten Netzaufrufe passen weiterhin.
+
 **Hinweise für die Umsetzung**
 
 - Arbeitsverzeichnis ist immer die Projektwurzel `D:\KI Projekte\Korrektor`. Tests laufen mit `python -m pytest` (so liegt die Wurzel im Suchpfad).

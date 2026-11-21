@@ -15,7 +15,7 @@ def _aufbauen(tmp_path):
     }), encoding="utf-8")
     ziel = tmp_path / "ergebnisse" / "claude"
     ziel.mkdir(parents=True)
-    fund = lambda nr, vorschlag: {"id": nr, "kategorie": "R", "gelesen": "x",
+    fund = lambda nr, vorschlag: {"id": nr, "kategorie": "R", "gelesen": "Fahrad",
                                   "vorschlag": vorschlag,
                                   "anker": {"typ": "wort", "rahmen": [0, 0, 10, 10]}}
     (ziel / "C_1_gerade.json").write_text(json.dumps({
@@ -28,16 +28,17 @@ def _aufbauen(tmp_path):
 def test_daten_kennzeichnen_zuordnung(tmp_path):
     antwort = _aufbauen(tmp_path).get("/daten").get_json()
     funde = antwort["ergebnisse"][0]["funde"]
-    assert [f["zugeordnet"] for f in funde] == [True, False]
+    assert [f["status"] for f in funde] == ["zugeordnet", "offen"]
+    assert antwort["ergebnisse"][0]["offene_fehler"] == []
     assert antwort["klicks"] == {}
 
 
 def test_klick_wird_gespeichert(tmp_path):
     client = _aufbauen(tmp_path)
-    client.post("/klick", json={"schluessel": "claude/C_1_gerade/2", "feld": "echt", "wert": True})
+    client.post("/klick", json={"schluessel": "claude/C_1_gerade/2", "feld": "urteil", "wert": "echt"})
     client.post("/klick", json={"schluessel": "claude/C_1_gerade/2", "feld": "sitzt", "wert": False})
     gespeichert = json.loads((tmp_path / "pruefseite" / "klicks.json").read_text(encoding="utf-8"))
-    assert gespeichert == {"claude/C_1_gerade/2": {"echt": True, "sitzt": False}}
+    assert gespeichert == {"claude/C_1_gerade/2": {"urteil": "echt", "sitzt": False}}
 
 
 def test_foto_wird_ausgeliefert(tmp_path):

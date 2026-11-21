@@ -44,12 +44,21 @@ SEITE = """<!doctype html>
 let daten, aktuell = 0;
 const el = id => document.getElementById(id);
 const stamm = e => e.verfahren + "/" + e.bild.replace(/\\.[^.]+$/, "");
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => "&#" + c.charCodeAt(0) + ";");
 
 async function laden() {
   daten = await (await fetch("/daten")).json();
   el("auswahl").innerHTML = daten.ergebnisse.map((e, i) =>
-    `<option value="${i}">${e.bild} – ${e.verfahren} (${e.funde.length} Funde)</option>`).join("");
+    `<option value="${i}">${esc(e.bild)} – ${esc(e.verfahren)} (${e.funde.length} Funde)</option>`).join("");
   el("auswahl").onchange = ev => { aktuell = +ev.target.value; zeigen(); };
+  el("liste").addEventListener("click", ev => {
+    const k = ev.target.closest("button[data-feld]");
+    if (k) klicken(k.dataset.schluessel, k.dataset.feld, k.dataset.wert === "true");
+  });
+  el("liste").addEventListener("change", ev => {
+    const s = ev.target.closest("select[data-feld]");
+    if (s) klicken(s.dataset.schluessel, s.dataset.feld, s.value);
+  });
   zeigen();
 }
 
@@ -64,44 +73,65 @@ function zeigen() {
   for (const f of e.funde) {
     const schluessel = stamm(e) + "/" + f.id;
     const klick = daten.klicks[schluessel] || {};
+    const urteil = klick.urteil || "";
     const [x, y, b, h] = f.anker.rahmen;
     const r = document.createElement("div");
-    r.className = "rahmen " + f.anker.typ;
+    r.className = "rahmen " + (f.anker.typ === "luecke" ? "luecke" : "wort");
     r.id = "r" + f.id;
     r.style.cssText = `left:${x / bb * 100}%;top:${y / bh * 100}%;` +
                       `width:${b / bb * 100}%;height:${h / bh * 100}%`;
     r.onclick = () => hervorheben(f.id, true);
     el("buehne").appendChild(r);
 
-    const braucht_echt = !f.zugeordnet;
-    const fertig = "sitzt" in klick || (braucht_echt && klick.echt === false);
+    // Fertig ist ein Fund erst, wenn alles bewertet ist, was die Auswertung braucht.
+    const fertig = f.status === "dublette" ? true
+      : f.status === "offen" ? (urteil === "erfunden" || (urteil !== "" && "sitzt" in klick))
+      : "sitzt" in klick;
     if (!fertig) offen++;
     const karte = document.createElement("div");
     karte.className = "fund" + (fertig ? "" : " offen");
     karte.id = "f" + f.id;
     karte.onmouseenter = () => hervorheben(f.id, false);
-    karte.innerHTML = `<b>${f.id}. ${f.kategorie}</b> „${f.gelesen}“ → „${f.vorschlag}“
-      ${f.unsicher_gelesen ? "<br><small>unsicher gelesen</small>" : ""}
-      ${braucht_echt ? "<br><small>steht nicht in der Lösung:</small><br>" +
-        knopf(schluessel, "echt", true, "tatsächlich ein Fehler", klick) +
-        knopf(schluessel, "echt", false, "erfunden", klick) : ""}
-      <br><small>Platzierung:</small><br>
-      ${knopf(schluessel, "sitzt", true, "sitzt", klick)}
-      ${knopf(schluessel, "sitzt", false, "sitzt nicht", klick)}`;
+    let html = `<b>${f.id}. ${esc(f.kategorie)}</b> „${esc(f.gelesen)}“ → „${esc(f.vorschlag)}“`;
+    if (f.unsicher_gelesen) html += "<br><small>unsicher gelesen</small>";
+    if (f.status === "dublette")
+      html += "<br><small>Dublette: betrifft einen Fehler, der schon gefunden wurde. Zählt nicht mit.</small>";
+    if (f.status === "offen")
+      html += "<br><small>nicht automatisch zugeordnet – was ist das?</small><br>" +
+        `<select data-schluessel="${esc(schluessel)}" data-feld="urteil">` +
+        wahl("", "– bitte wählen –", urteil) +
+        wahl("erfunden", "erfunden (kein Fehler)", urteil) +
+        wahl("echt", "echter Fehler, steht nicht in der Lösung", urteil) +
+        e.offene_fehler.map(l =>
+          wahl("fehler:" + l.id, `Lösung ${l.id} (${l.kategorie}): ${l.falsch} → ${l.richtig}`, urteil)).join("") +
+        "</select>";
+    if (f.status !== "dublette" && urteil !== "erfunden")
+      html += "<br><small>Platzierung:</small><br>" +
+        knopf(schluessel, "sitzt", true, "sitzt", klick) +
+        knopf(schluessel, "sitzt", false, "sitzt nicht", klick);
+    karte.innerHTML = html;
     el("liste").appendChild(karte);
   }
   el("stand").innerHTML = `<small>${offen} von ${e.funde.length} Funden noch offen` +
-    (e.fehlermeldung ? ` · Ausfall: ${e.fehlermeldung}` : "") + `</small>`;
+    (e.verworfen ? ` · ${e.verworfen} unbrauchbare Funde verworfen` : "") +
+    (e.fehlermeldung ? ` · Ausfall: ${esc(e.fehlermeldung)}` : "") + `</small>`;
+}
+
+function wahl(wert, text, gewaehlt) {
+  return `<option value="${esc(wert)}"${wert === gewaehlt ? " selected" : ""}>${esc(text)}</option>`;
 }
 
 function knopf(schluessel, feld, wert, text, klick) {
   const gewaehlt = klick[feld] === wert ? "gewaehlt" : "";
-  return `<button class="${gewaehlt}" onclick="klicken('${schluessel}','${feld}',${wert})">${text}</button>`;
+  return `<button class="${gewaehlt}" data-schluessel="${esc(schluessel)}" data-feld="${feld}" ` +
+         `data-wert="${wert}">${text}</button>`;
 }
 
 async function klicken(schluessel, feld, wert) {
-  await fetch("/klick", {method: "POST", headers: {"Content-Type": "application/json"},
-                         body: JSON.stringify({schluessel, feld, wert})});
+  const antwort = await fetch("/klick", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({schluessel, feld, wert})});
+  if (!antwort.ok) { alert("Der Klick konnte nicht gespeichert werden."); return; }
   (daten.klicks[schluessel] ||= {})[feld] = wert;
   zeigen();
 }
@@ -128,9 +158,13 @@ def daten():
     for datei in sorted((WURZEL / "ergebnisse").glob("*/*.json")):
         erg = json.loads(datei.read_text(encoding="utf-8"))
         loesung = loesung_laden(WURZEL, erg["bild"])
-        zuordnung = zuordnen(erg["funde"], loesung["fehler"]) if loesung else {}
+        fehler = loesung["fehler"] if loesung else []
+        zuordnung, dubletten = zuordnen(erg["funde"], fehler)
+        gefunden = {nr for ids in zuordnung.values() for nr in ids}
         for f in erg["funde"]:
-            f["zugeordnet"] = f["id"] in zuordnung
+            f["status"] = ("zugeordnet" if f["id"] in zuordnung
+                           else "dublette" if f["id"] in dubletten else "offen")
+        erg["offene_fehler"] = [e for e in fehler if e["id"] not in gefunden]
         ergebnisse.append(erg)
     return jsonify({"ergebnisse": ergebnisse, "klicks": klicks_laden(WURZEL)})
 
@@ -138,6 +172,8 @@ def daten():
 @app.get("/foto/<name>")
 def foto(name):
     pfad = WURZEL / "fotos" / Path(name).name
+    if not pfad.is_file():
+        return Response("Foto nicht gefunden", status=404)
     return Response(bild.als_jpeg(bild.offen(pfad)), mimetype="image/jpeg")
 
 

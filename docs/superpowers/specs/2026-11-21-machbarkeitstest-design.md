@@ -139,7 +139,9 @@ Alle Messgrößen werden je Verfahren insgesamt sowie getrennt nach Kategorie (R
 Eine lokale HTML-Seite zeigt je Bild und Verfahren das Foto mit den eingezeichneten Rahmen und einer Fundliste. Pro Fund gibt es zwei Angaben per Klick:
 
 - Platzierung: „sitzt“ oder „sitzt nicht“,
-- nur bei Funden ohne Entsprechung in der Lösungsdatei: „tatsächlich ein Fehler“ oder „erfunden“. Damit werden Fehler berücksichtigt, die beim Abschreiben unbemerkt entstanden sind.
+- nur bei Funden, die nicht automatisch einem Lösungsfehler zugeordnet wurden, eine Auswahl: „erfunden“, „echter Fehler, steht nicht in der Lösung“ (beim Abschreiben unbemerkt entstanden) oder „gehört zu Lösungsfehler Nr. …“ (die automatische Zuordnung hat ihn verfehlt, z. B. weil das Wort verlesen wurde). Eine Handzuordnung zählt als gefunden.
+
+Die automatische Zuordnung vergleicht, was sich zwischen falscher und richtiger Schreibung ändert: Bei einem geänderten Wort muss der Vorschlag das neue und die Lesung das alte Wort enthalten; bei einem fehlenden Satzzeichen muss der Vorschlag das Zeichen direkt neben einem der Nachbarwörter enthalten. Ein Fund kann zwei benachbarte Fehler abdecken. Ein weiterer Fund zu einem schon gefundenen Fehler ist eine Dublette und zählt weder als gefunden noch als erfunden. Erfundene Fehler pro Seite werden nur auf Seiten ohne Ausfall bezogen.
 
 Die Klicks werden in einer JSON-Datei gespeichert, die das Auswertungsskript einliest.
 

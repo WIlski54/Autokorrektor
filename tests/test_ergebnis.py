@@ -6,6 +6,8 @@ from korrektor import ergebnis
 def test_beschneiden_haelt_rahmen_im_bild():
     assert ergebnis.beschneiden([-10, 20, 50, 30], (100, 40)) == [0, 20, 40, 20]
     assert ergebnis.beschneiden([10, 10, 20, 20], (100, 100)) == [10, 10, 20, 20]
+    assert ergebnis.beschneiden([50, 60, 20, -30], (100, 100)) == [50, 30, 20, 30]
+    assert ergebnis.beschneiden([400, 300, 60, 20], (100, 100)) == [99, 99, 1, 1]
 
 
 def test_fund_merkt_beschneidung():

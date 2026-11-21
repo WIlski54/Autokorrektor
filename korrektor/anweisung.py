@@ -35,7 +35,14 @@ def anweisung(rahmenhinweis):
 
 def json_lesen(text):
     """Liest das erste JSON-Objekt aus einer Modellantwort, auch mit Vorrede oder Codezaun."""
-    anfang, ende = text.find("{"), text.rfind("}")
-    if anfang == -1 or ende <= anfang:
-        raise ValueError("Antwort enthält kein JSON-Objekt")
-    return json.loads(text[anfang:ende + 1])
+    dekoder = json.JSONDecoder()
+    anfang = text.find("{")
+    while anfang != -1:
+        try:
+            objekt, _ = dekoder.raw_decode(text[anfang:])
+            if isinstance(objekt, dict):
+                return objekt
+        except json.JSONDecodeError:
+            pass
+        anfang = text.find("{", anfang + 1)
+    raise ValueError("Antwort enthält kein JSON-Objekt")

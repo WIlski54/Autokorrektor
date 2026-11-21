@@ -29,7 +29,10 @@ Testseiten. Es werden keine Schülerarbeiten verwendet.
 
 1. `python lauf.py` schickt alle Fotos durch alle Verfahren (Vorhandenes wird übersprungen).
 2. `python pruefseite.py`, dann http://127.0.0.1:5000: je Fund „sitzt“ oder „sitzt nicht“
-   klicken; bei Funden außerhalb der Lösung zusätzlich „tatsächlich ein Fehler“ oder „erfunden“.
+   klicken; bei Funden, die nicht automatisch zugeordnet wurden, im Auswahlfeld angeben, ob sie
+   erfunden sind, ein echter Fehler außerhalb der Lösung oder zu welchem Lösungsfehler sie gehören.
+   Wird ein Foto neu berechnet, verfallen die Klicks dazu. Ausgefallene Läufe wiederholt
+   `python lauf.py` beim nächsten Start von selbst.
 3. `python auswerten.py` schreibt `bericht.html`.
 
 Fotos, Ergebnisse, Klicks und Bericht bleiben lokal und werden nicht ins Repository aufgenommen.
