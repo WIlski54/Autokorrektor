@@ -10,7 +10,7 @@ from korrektor.verfahren import allein
 NAME = "claude"
 
 
-def fragen(anweisung, jpeg, modell, max_tokens=8000):
+def fragen(anweisung, jpeg, modell, json_antwort=True, max_tokens=8000):
     """`jpeg` darf None sein; dann geht nur Text an das Modell."""
     inhalt = []
     if jpeg is not None:

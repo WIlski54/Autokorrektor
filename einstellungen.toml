@@ -5,11 +5,13 @@ max_kante = 2400
 # Kennungen vor dem ersten Lauf gegen die Anbieterdokumentation prüfen.
 # Ein leerer Eintrag schaltet das Verfahren ab.
 gemini = "gemini-4-hydrogen"
-claude = "claude-fable-5-2"
-gpt = ""
-vision_analyse = "claude-fable-5-2"
+claude = ""
+gpt = "gpt-6.2-sol"
+vision_analyse = "gemini-4-hydrogen"
 
 [vision]
+# Sprachmodell für Analyse und Gegenprüfung in Verfahren 4: "gemini", "claude" oder "gpt"
+analyse_anbieter = "gemini"
 # Unter diesem Vertrauenswert gilt ein Wort als unsicher gelesen
 sicherheit_schwelle = 0.6
 

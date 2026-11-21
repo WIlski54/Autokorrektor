@@ -11,12 +11,15 @@ from korrektor.verfahren import allein
 NAME = "gemini"
 
 
-def fragen(anweisung, jpeg, modell):
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+def fragen(anweisung, jpeg, modell, json_antwort=True):
+    """`jpeg` darf None sein; dann geht nur Text an das Modell."""
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"].strip())
     antwort = client.models.generate_content(
         model=modell,
-        contents=[types.Part.from_bytes(data=jpeg, mime_type="image/jpeg"), anweisung],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
+        contents=([types.Part.from_bytes(data=jpeg, mime_type="image/jpeg")] if jpeg else [])
+                 + [anweisung],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json" if json_antwort else "text/plain"),
     )
     nutzung = antwort.usage_metadata
     return antwort.text, {"eingabe": nutzung.prompt_token_count or 0,

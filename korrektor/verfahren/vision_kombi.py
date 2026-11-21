@@ -1,5 +1,14 @@
 """Verfahren 4: Cloud Vision liest und verortet, ein Sprachmodell analysiert und prüft gegen."""
-from korrektor.ergebnis import fund
+import importlib
+import os
+import time
+from pathlib import Path
+
+from google.cloud import vision
+
+from korrektor import bild
+from korrektor.anweisung import json_lesen
+from korrektor.ergebnis import ergebnis, fund
 from korrektor.koordinaten import ecken_zu_rahmen, luecke, vereinigen
 
 NAME = "vision_kombi"
@@ -79,3 +88,62 @@ def ist_unsicher(ocr_text, buchstabiert, sicherheiten, schwelle):
     """Unsicher, wenn die Gegenlesung abweicht oder die Texterkennung selbst zweifelt."""
     gleich = ocr_text.strip() == buchstabiert.strip().strip(".,;:!?\"„“ ")
     return (not gleich) or min(sicherheiten) < schwelle
+
+
+def vision_lesen(jpeg):
+    """Schickt das Bild an Cloud Vision (EU-Endpunkt) und gibt die Textannotation zurück."""
+    client = vision.ImageAnnotatorClient(client_options={
+        "api_key": os.environ["GOOGLE_VISION_API_KEY"].strip(),
+        "api_endpoint": "eu-vision.googleapis.com"})
+    antwort = client.document_text_detection(image=vision.Image(content=jpeg))
+    if antwort.error.message:
+        raise RuntimeError(antwort.error.message)
+    return antwort.full_text_annotation
+
+
+def gegenpruefen(funde, woerter, bildpfad, fragen, modell, schwelle):
+    """Lässt jeden R-Fund am Bildausschnitt buchstabieren und kennzeichnet Zweifel."""
+    nutzung = {"eingabe": 0, "ausgabe": 0}
+    for f in funde:
+        if f["kategorie"] != "R" or f["anker"]["typ"] != "wort":
+            continue
+        von, bis = f["woerter"]
+        betroffen = woerter[von:bis + 1]
+        ausschnitt = bild.ausschnitt(bildpfad, f["anker"]["rahmen"])
+        text, verbrauch = fragen(BUCHSTABIEREN, ausschnitt, modell, json_antwort=False)
+        f["gegenlesung"] = text.strip()
+        f["unsicher_gelesen"] = ist_unsicher(
+            " ".join(wort["text"] for wort in betroffen), text,
+            [wort["sicherheit"] for wort in betroffen], schwelle)
+        nutzung["eingabe"] += verbrauch["eingabe"]
+        nutzung["ausgabe"] += verbrauch["ausgabe"]
+    return nutzung
+
+
+def ausfuehren(bildpfad, einst):
+    """Das Sprachmodell für Analyse und Gegenprüfung ist einstellbar:
+    [vision] analyse_anbieter = "gemini" | "claude" | "gpt", Modell unter [modelle] vision_analyse."""
+    bildpfad = Path(bildpfad)
+    anbieter = einst["vision"]["analyse_anbieter"]
+    fragen = importlib.import_module(f"korrektor.verfahren.{anbieter}").fragen
+    modell = einst["modelle"]["vision_analyse"]
+    modelle = {"lesen": "cloud-vision-document-text", "analyse": modell}
+    daten, groesse, faktor = bild.laden(bildpfad, einst["max_kante"])
+    start = time.time()
+    meldung = None
+    for _ in range(2):
+        try:
+            annotation = vision_lesen(daten)
+            woerter = woerter_aus_antwort(annotation, faktor)
+            text, nutzung = fragen(ANALYSE + nummerierter_text(woerter), None, modell)
+            funde = funde_bauen(json_lesen(text), woerter, groesse)
+            zusatz = gegenpruefen(funde, woerter, bildpfad, fragen, modell,
+                                  einst["vision"]["sicherheit_schwelle"])
+            nutzung = {"eingabe": nutzung["eingabe"] + zusatz["eingabe"],
+                       "ausgabe": nutzung["ausgabe"] + zusatz["ausgabe"]}
+            return ergebnis(bildpfad.name, NAME, modelle, groesse, annotation.text, funde,
+                            time.time() - start, nutzung)
+        except Exception as fehler:
+            meldung = f"{type(fehler).__name__}: {fehler}"
+    return ergebnis(bildpfad.name, NAME, modelle, groesse, dauer_s=time.time() - start,
+                    fehlermeldung=meldung)

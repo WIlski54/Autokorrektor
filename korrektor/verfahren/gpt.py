@@ -10,16 +10,15 @@ from korrektor.verfahren import allein
 NAME = "gpt"
 
 
-def fragen(anweisung, jpeg, modell):
-    bild_url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+def fragen(anweisung, jpeg, modell, json_antwort=True):
+    """`jpeg` darf None sein; dann geht nur Text an das Modell."""
+    inhalt = [{"type": "text", "text": anweisung}]
+    if jpeg is not None:
+        bild_url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+        inhalt.append({"type": "image_url", "image_url": {"url": bild_url}})
+    zusatz = {"response_format": {"type": "json_object"}} if json_antwort else {}
     antwort = OpenAI().chat.completions.create(
-        model=modell,
-        response_format={"type": "json_object"},
-        messages=[{"role": "user", "content": [
-            {"type": "text", "text": anweisung},
-            {"type": "image_url", "image_url": {"url": bild_url}},
-        ]}],
-    )
+        model=modell, messages=[{"role": "user", "content": inhalt}], **zusatz)
     return antwort.choices[0].message.content, {
         "eingabe": antwort.usage.prompt_tokens, "ausgabe": antwort.usage.completion_tokens}
 
