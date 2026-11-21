@@ -16,3 +16,8 @@ ergebnisse/
 pruefseite/klicks.json
 bericht.html
 bericht_bilder/
+
+# Fotos im Hauptordner nie hochladen
+/*.jpg
+/*.jpeg
+/*.png
