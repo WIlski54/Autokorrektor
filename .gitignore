@@ -1,0 +1,18 @@
+# Schlüssel und lokale Umgebung
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Beispielbilder der Schulbuchverlage (Urheberrecht) – nur lokal
+/Text1.jpg
+/text2.jpg
+/text3.jpg
+/text4.jpg
+
+# Eigene Aufnahmen und Messergebnisse bleiben lokal
+fotos/
+ergebnisse/
+pruefseite/klicks.json
+bericht.html
+bericht_bilder/
