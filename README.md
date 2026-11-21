@@ -7,8 +7,8 @@ Testseiten. Es werden keine Schülerarbeiten verwendet.
 
 1. `python -m venv .venv`, aktivieren, `pip install -r requirements.txt`
 2. `.env.beispiel` nach `.env` kopieren und Schlüssel eintragen
-3. Für Cloud Vision: `gcloud auth application-default login` und
-   `gcloud auth application-default set-quota-project PROJEKT_ID`
+3. Für Cloud Vision: im Google-Cloud-Projekt die „Cloud Vision API“ aktivieren, einen auf diese
+   Schnittstelle beschränkten API-Schlüssel anlegen und als `GOOGLE_VISION_API_KEY` in `.env` eintragen
 4. Modellkennungen in `einstellungen.toml` prüfen
 
 ## Testseiten herstellen
