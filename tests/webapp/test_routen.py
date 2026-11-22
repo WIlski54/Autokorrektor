@@ -621,11 +621,15 @@ def test_arbeit_zeigt_seite_mit_zeichen_als_daten(client, speicher):
     assert wort["gelesen"] == "Fahrad" and wort["vorschlag"] == "Fahrrad" and wort["id"]
     assert luecke["typ"] == "luecke" and luecke["kategorie"] == "Z"
     assert f'src="/bild/seite/{s1}"' in text
-    assert "Seite 1 von 2" in text and "Etappe 2" in text
-    assert "Fahrad" in text and "Fahrrad" in text and f'data-zeichen="{wort["id"]}"' in text
+    assert "Seite 1 von 2" in text and "Etappe 2" not in text and "Nur Ansicht" not in text
     assert f'href="/arbeit/{erste["id"]}?seite=2"' in text
     assert f'href="/arbeit/{zweite["id"]}"' in text
-    assert "<form" not in text  # nur lesend
+    # Die Korrekturansicht zeichnet Rahmen und Liste im Browser aus den Daten.
+    assert 'id="zeichenliste"' in text and 'id="rahmenebene"' in text
+    assert 'id="verworfene-zeigen"' in text and 'id="meldung"' in text
+    assert "/statisch/arbeit.js" in text
+    for taste in ("<kbd>N</kbd>", "<kbd>B</kbd>", "<kbd>V</kbd>", "<kbd>Z</kbd>", "<kbd>Entf</kbd>"):
+        assert taste in text  # die Belegung steht sichtbar in der Ansicht
 
 
 def test_arbeit_blaettert_zur_zweiten_seite(client, speicher):
@@ -653,8 +657,10 @@ def test_arbeit_maskiert_texte_des_modells(client, speicher):
     speicher.seite_status(s2, "fehlgeschlagen", fehlermeldung="<img src=x onerror=alert(2)>")
     arbeit_id = speicher.arbeiten(nr)[0]["id"]
     text = _text(client.get(f"/arbeit/{arbeit_id}"))
+    # Die Texte stehen nur in den eingebetteten Daten, dort unschädlich geschrieben; das
+    # Skript setzt sie als Text ein.
     assert "<script>alert(1)</script>" not in text and "a<b" not in text and "<i>R</i>" not in text
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text and "a&lt;b &amp; " in text
+    assert "</script>alert" not in text and r"\u003cscript\u003ealert(1)" in text
     (zeichen,) = _daten(text, "arbeit-daten")["zeichen"]
     assert zeichen["gelesen"] == "<script>alert(1)</script>" and zeichen["vorschlag"] == 'a<b & "c"'
     text = _text(client.get(f"/arbeit/{arbeit_id}?seite=2"))
@@ -671,7 +677,7 @@ def test_arbeit_zeigt_verworfene_zeichen_nicht(client, speicher):
     # die sichtbare Seite nennt sie nicht.
     assert [z["gelesen"] for z in daten["verworfen"]] == ["wier"]
     sichtbar = text[:text.index('<script type="application/json" id="arbeit-daten">')]
-    assert "wier" not in sichtbar and "Fahrad" in sichtbar
+    assert "wier" not in sichtbar and "Fahrad" not in sichtbar  # beides nur in den Daten
 
 
 def test_arbeit_ohne_analyse_nennt_den_stand(client, speicher):

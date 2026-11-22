@@ -1,9 +1,9 @@
 {% extends "grundriss.html" %}
 {% block titel %}Arbeit {{ arbeit.kuerzel }} – {{ aufgabe.titel }}{% endblock %}
-{% block koerperklasse %}breit{% endblock %}
+{% block koerperklasse %}breit korrektur{% endblock %}
 {% block krumen %}
 <li><a href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">{{ aufgabe.titel }}</a></li>
-<li aria-current="page">Arbeit {{ arbeit.kuerzel }}</li>
+<li aria-current="page">Arbeit <span data-rolle="arbeitskuerzel">{{ arbeit.kuerzel }}</span></li>
 {% endblock %}
 {% macro blaettern(ziel, text, kennung) -%}
   {% if ziel %}<a class="knopf klein" id="{{ kennung }}" href="{{ ziel }}">{{ text }}</a>
@@ -12,12 +12,16 @@
 {% block inhalt %}
 <div class="titelzeile">
   <div>
-    <h1>Arbeit {{ arbeit.kuerzel }}</h1>
+    <h1>Arbeit <span data-rolle="arbeitskuerzel">{{ arbeit.kuerzel }}</span></h1>
     <p class="leise unterzeile">
       Seite {{ nummer }} von {{ seitenzahl }} ·
       <span class="status status-{{ seite.analyse_status }}">{{ statustext[seite.analyse_status] }}</span>
+      · <span id="arbeit-offen" role="status"></span>
     </p>
   </div>
+  <p id="bestaetigt-anzeige" class="bestaetigt-anzeige" role="status" hidden>
+    <strong>Korrektur bestätigt</strong> am <span id="bestaetigt-wann"></span>
+  </p>
   <nav class="blaettern" aria-label="Blättern">
     <div>
       {{ blaettern(url_for('seiten.arbeit', arbeit_id=arbeit.id, seite=nummer - 1) if nummer > 1, '‹ Seite', 'seite-zurueck') }}
@@ -30,10 +34,11 @@
   </nav>
 </div>
 
-<p class="meldung">
-  Nur Ansicht: Die Rahmen zeigen die Vorschläge der KI. Bestätigen, Verwerfen, Verschieben,
-  Ändern und eigene Zeichen folgen in Etappe 2.
-</p>
+<div id="meldung" class="meldung schwebend fehler" role="alert" hidden>
+  <span id="meldung-text"></span>
+  <button type="button" class="griff" id="meldung-zu" aria-label="Meldung schließen">×</button>
+</div>
+<noscript><p class="meldung fehler">Die Korrekturansicht braucht JavaScript.</p></noscript>
 
 {% if seite.analyse_status == 'fehlgeschlagen' %}
 <p class="meldung fehler" role="alert">
@@ -41,7 +46,7 @@
   In der <a href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">Stapelansicht</a> lässt sie sich erneut versuchen.
 </p>
 {% elif seite.analyse_status in ('wartet', 'laeuft') %}
-<p class="meldung">Die Analyse dieser Seite läuft noch. Die Vorschläge erscheinen nach dem Neuladen der Seite.</p>
+<p class="meldung">Die Analyse dieser Seite läuft noch. Bis sie fertig ist, lässt sich hier nichts ändern; die Vorschläge erscheinen nach dem Neuladen der Seite.</p>
 {% elif seite.analyse_status == 'neu' %}
 <p class="meldung">Diese Seite ist noch nicht analysiert.</p>
 {% endif %}
@@ -53,49 +58,44 @@
       <button class="knopf klein" type="button" id="zoom-einpassen">Einpassen</button>
       <button class="knopf klein" type="button" id="zoom-groesser" aria-label="Vergrößern">+</button>
       <span class="leise" id="zoom-anzeige" aria-live="polite">100 %</span>
-      <span class="leise tastenhinweis">Tasten: ← → Seite wechseln · Esc Auswahl aufheben</span>
     </div>
     <div class="rollfeld" id="rollfeld">
       <div class="buehne" id="buehne">
         <img id="foto" src="{{ url_for('seiten.bild_seite', seite_id=seite.id) }}"
-             width="{{ seite.breite }}" height="{{ seite.hoehe }}"
-             alt="Foto der Seite {{ nummer }} von Arbeit {{ arbeit.kuerzel }}">
+             width="{{ seite.breite }}" height="{{ seite.hoehe }}" draggable="false"
+             alt="Foto der Seite {{ nummer }} der Arbeit">
         <div id="rahmenebene" class="rahmenebene"></div>
       </div>
     </div>
+    <p class="tasten" aria-label="Tastenbelegung">
+      <span><kbd>N</kbd> <kbd>Tab</kbd> nächster offener</span>
+      <span><kbd>B</kbd> <kbd>Enter</kbd> bestätigen</span>
+      <span><kbd>V</kbd> <kbd>Entf</kbd> verwerfen</span>
+      <span><kbd>Z</kbd> zurückholen</span>
+      <span><kbd>←</kbd> <kbd>→</kbd> Seite</span>
+      <span><kbd>Bild↑</kbd> <kbd>Bild↓</kbd> Arbeit</span>
+      <span><kbd>Esc</kbd> Auswahl aufheben</span>
+    </p>
   </section>
 
-  <section class="listenspalte" aria-labelledby="listentitel">
-    <h2 id="listentitel">
-      {% if zeichen|length == 1 %}1 Vorschlag{% else %}{{ zeichen|length }} Vorschläge{% endif %}
-    </h2>
-    {% if zeichen %}
-    <ol class="zeichenliste" id="zeichenliste">
-      {% for z in zeichen %}
-      {% set klasse = 'kat-' ~ z.kategorie if z.kategorie in kategorien else 'kat-sonst' %}
-      <li>
-        <button type="button" class="eintrag {{ klasse }} {{ 'offen' if z.status == 'offen' else 'fest' }}" data-zeichen="{{ z.id }}">
-          <span class="kuerzel" title="{{ kategorien.get(z.kategorie, z.kategorie) }}">{{ z.kategorie }}</span>
-          <span class="wortlaut">
-            <span class="gelesen">{{ z.gelesen or '(ohne Angabe)' }}</span>
-            {% if z.vorschlag %}<span class="pfeil" aria-hidden="true">→</span><span class="nur-vorlesen">Vorschlag:</span>
-            <span class="vorschlag">{{ z.vorschlag }}</span>{% endif %}
-          </span>
-          <span class="leise art">{{ 'fehlendes Zeichen' if z.typ == 'luecke' else '' }}{{ '' if z.status == 'offen' else ' bestätigt' }}</span>
-        </button>
-      </li>
-      {% endfor %}
-    </ol>
-    {% elif seite.analyse_status == 'fertig' %}
-    <p class="leise">Auf dieser Seite hat die KI nichts vorgeschlagen.</p>
-    {% else %}
-    <p class="leise">Noch keine Vorschläge.</p>
-    {% endif %}
+  <section class="listenspalte" id="listenspalte" aria-labelledby="listentitel">
+    <h2 id="listentitel">Zeichen</h2>
+    <p class="leise listenzahlen" id="seite-zahlen" role="status"></p>
+    <label class="schalter schmal">
+      <input type="checkbox" id="verworfene-zeigen">
+      <span>Verworfene zeigen <span id="verworfen-zahl" class="leise"></span></span>
+    </label>
+    <ol class="zeichenliste" id="zeichenliste"></ol>
+    <p class="leise" id="liste-leer" hidden>
+      {%- if seite.analyse_status == 'fertig' %}Auf dieser Seite steht kein Zeichen.
+      {%- else %}Noch keine Vorschläge.{% endif -%}
+    </p>
     <div class="legende" aria-label="Legende">
       {% for kuerzel, name in kategorien.items() %}
       <span class="kat-{{ kuerzel }}"><span class="kuerzel">{{ kuerzel }}</span> {{ name }}</span>
       {% endfor %}
-      <span class="leise">gestrichelt = offener Vorschlag</span>
+      <span class="kat-hand"><span class="kuerzel">✎</span> selbst gesetzt</span>
+      <span class="leise">gestrichelt und blass = offener Vorschlag der KI · durchgezogen = bestätigt</span>
     </div>
   </section>
 </div>
