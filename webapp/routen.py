@@ -177,15 +177,20 @@ STATUSTEXT = {
 def _stand(aufgabe_id):
     """Der Stand der Analyse einer Aufgabe als einfache Daten für Seite und Abfrage."""
     arbeiten = []
-    gesamt = {"seiten": 0, "fertig": 0, "fehlgeschlagen": 0, "unterwegs": 0, "offen": 0}
+    gesamt = {"seiten": 0, "fertig": 0, "fehlgeschlagen": 0, "unterwegs": 0, "offen": 0,
+              "arbeiten": 0, "bestaetigt": 0}
     for arbeit in _speicher().arbeiten(aufgabe_id):
         seiten_der_arbeit = [{"id": s["id"], "nummer": s["nummer"], "status": s["analyse_status"],
                               "fehlermeldung": s["fehlermeldung"]} for s in arbeit["seiten"]]
         arbeiten.append({"id": arbeit["id"], "kuerzel": arbeit["kuerzel"],
                          "seitenzahl": len(seiten_der_arbeit),
                          "status_gesamt": arbeit["status_gesamt"], "offen": arbeit["offen"],
+                         "bestaetigt_am": arbeit["bestaetigt_am"],
+                         "bestaetigbar": arbeit["bestaetigbar"],
                          "seiten": seiten_der_arbeit})
         gesamt["offen"] += arbeit["offen"]
+        gesamt["arbeiten"] += 1
+        gesamt["bestaetigt"] += arbeit["bestaetigt_am"] is not None
         for seite in seiten_der_arbeit:
             gesamt["seiten"] += 1
             if seite["status"] in ("fertig", "fehlgeschlagen"):
@@ -265,6 +270,7 @@ def arbeit(arbeit_id):
                     "offen": len(regeln.offene(s["zeichen"]))}
                    for platz_s, s in enumerate(arbeit["seiten"], start=1)],
         "kuerzel": _kuerzelliste(),
+        "url_stand": url_for("seiten.stand", aufgabe_id=aufgabe["id"]),
     }
     return render_template(
         "arbeit.html", aufgabe=aufgabe, arbeit=arbeit, seite=seite, nummer=nummer,

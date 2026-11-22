@@ -30,6 +30,15 @@
     offen.textContent = arbeit.offen ? vorschlaege(arbeit.offen)
       : (arbeit.status_gesamt === "fertig" ? "keine offenen Vorschläge" : "");
 
+    var bestaetigt = kachel.querySelector('[data-rolle="bestaetigt"]');
+    bestaetigt.textContent = "";
+    if (arbeit.bestaetigt_am || arbeit.status_gesamt === "fertig") {
+      var marke = document.createElement("span");
+      marke.className = arbeit.bestaetigt_am ? "status status-fertig" : "leise";
+      marke.textContent = arbeit.bestaetigt_am ? "Korrektur bestätigt" : "Korrektur noch nicht bestätigt";
+      bestaetigt.appendChild(marke);
+    }
+
     var liste = kachel.querySelector('[data-rolle="fehler"]');
     liste.textContent = "";
     arbeit.seiten.forEach(function (seite) {
@@ -67,6 +76,7 @@
     if (g.unterwegs) { teile.push(g.unterwegs + " in Arbeit"); }
     if (g.fehlgeschlagen) { teile.push(g.fehlgeschlagen + " fehlgeschlagen"); }
     if (g.offen) { teile.push(vorschlaege(g.offen)); }
+    teile.push(g.bestaetigt + " von " + g.arbeiten + " Arbeiten bestätigt");
     gesamttext.textContent = teile.join(" · ");
     return true;
   }

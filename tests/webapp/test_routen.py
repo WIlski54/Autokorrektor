@@ -508,7 +508,8 @@ def test_stand_liefert_arbeiten_mit_seiten(client, speicher, schlange, schein):
     assert zweite["status_gesamt"] == "neu" and zweite["offen"] == 0
     assert zweite["seiten"] == [{"id": s3, "nummer": 1, "status": "neu", "fehlermeldung": None}]
     assert stand["gesamt"] == {"seiten": 3, "fertig": 1, "fehlgeschlagen": 1, "unterwegs": 0,
-                               "offen": 1}
+                               "offen": 1, "arbeiten": 2, "bestaetigt": 0}
+    assert erste["bestaetigt_am"] is None and erste["bestaetigbar"] is False
     assert stand["aktiv"] is False
 
 

@@ -601,6 +601,8 @@ def test_arbeit_bettet_die_daten_der_korrekturansicht_ein(client, speicher):
         {"kuerzel": "Gr", "bezeichnung": "Grammatik", "eigen": False},
         {"kuerzel": "A", "bezeichnung": "Ausdruck", "eigen": True}]
     assert [k["kuerzel"] for k in daten["kuerzel"]] == ["R", "Z", "Gr", "A", "Sb", "T", "W", "I"]
+    aufgabe_id = speicher.arbeit(arbeit_id)["aufgabe_id"]
+    assert daten["url_stand"] == f"/aufgabe/{aufgabe_id}/stand"
 
 
 def test_arbeit_bettet_bestaetigung_und_geaenderte_kuerzel_ein(client, speicher):
@@ -614,3 +616,59 @@ def test_arbeit_bettet_bestaetigung_und_geaenderte_kuerzel_ein(client, speicher)
     assert daten["arbeit"]["bestaetigbar"] is True and daten["arbeit"]["grund"] == ""
     assert [k["kuerzel"] for k in daten["kuerzel"]] == ["R", "Z", "Gr", "St"]
     assert daten["verworfen"] == []
+
+
+# --- Korrekturansicht, Stapelansicht und Aufgabenliste ---------------------------------------------------
+
+def test_korrekturansicht_hat_fussleiste_dialoge_und_legende(client, speicher):
+    arbeit_id, _, _ = _arbeit(speicher, _zeichen())
+    text = _text(client.get(f"/arbeit/{arbeit_id}"))
+    for kennung in ("setzen-knopf", "rest-knopf", "gesamt-knopf", "neu-analyse-knopf",
+                    "kuerzel-knopf", "bestaetigt-anzeige", "meldung"):
+        assert f'id="{kennung}"' in text, kennung
+    for dialog in ("rest-dialog", "gesamt-dialog", "neu-analyse-dialog"):
+        assert f'<dialog id="{dialog}"' in text, dialog
+    for wort in ("Rest bestätigen", "Korrektur gesamt bestätigen", "Seite neu analysieren",
+                 "Zeichen setzen", "einzeln bestätigt", "gesammelt bestätigt", "geändert",
+                 "verworfen", "selbst gesetzt", "Richtigkeit der gesamten Korrektur"):
+        assert wort in text, wort
+    for taste in ("N", "Tab", "B", "Enter", "V", "Entf", "Z", "E", "S", "Esc"):
+        assert f"<kbd>{taste}</kbd>" in text, taste
+    assert "Etappe 2" not in text and "Sicherheit" not in text
+
+
+def test_stand_nennt_den_bestaetigungsstatus(client, speicher):
+    arbeit_id, _, _ = _bestaetigt(speicher, _zeichen(**FEST))
+    aufgabe_id = speicher.arbeit(arbeit_id)["aufgabe_id"]
+    (seite_id,) = speicher.arbeit_anlegen(aufgabe_id, [("x.jpg", _bild())])
+    _mit_zeichen(speicher, seite_id, _zeichen())
+    stand = client.get(f"/aufgabe/{aufgabe_id}/stand").get_json()
+    erste, zweite = stand["arbeiten"]
+    assert erste["bestaetigt_am"] == speicher.arbeit(arbeit_id)["bestaetigt_am"]
+    assert erste["bestaetigt_am"] is not None and erste["bestaetigbar"] is True
+    assert zweite["bestaetigt_am"] is None and zweite["bestaetigbar"] is False
+    assert (stand["gesamt"]["arbeiten"], stand["gesamt"]["bestaetigt"]) == (2, 1)
+    client.post(f"/zeichen/{speicher.arbeit(arbeit_id)['seiten'][0]['zeichen'][0]['id']}/verwerfen")
+    stand = client.get(f"/aufgabe/{aufgabe_id}/stand").get_json()
+    assert stand["arbeiten"][0]["bestaetigt_am"] is None and stand["gesamt"]["bestaetigt"] == 0
+
+
+def test_stapelansicht_und_aufgabenliste_zeigen_die_bestaetigung(client, speicher):
+    arbeit_id, _, _ = _bestaetigt(speicher, _zeichen(**FEST))
+    aufgabe_id = speicher.arbeit(arbeit_id)["aufgabe_id"]
+    (seite_id,) = speicher.arbeit_anlegen(aufgabe_id, [("x.jpg", _bild())])
+    _mit_zeichen(speicher, seite_id, _zeichen())
+    text = _text(client.get(f"/aufgabe/{aufgabe_id}"))
+    assert "1 von 2 Arbeiten bestätigt" in text
+    assert text.count("Korrektur bestätigt") == 1 and text.count("noch nicht bestätigt") == 1
+    text = _text(client.get("/"))
+    assert "1 von 2 Arbeiten bestätigt" in text
+    assert 'href="/einstellungen/kuerzel"' in text and "Eigene Kürzel" in text
+
+
+def test_kuerzelseite_nennt_die_festen_kuerzel_und_fuehrt_zurueck(client):
+    text = _text(client.get("/einstellungen/kuerzel"))
+    for name in ("Rechtschreibung", "Zeichensetzung", "Grammatik"):
+        assert name in text
+    assert 'value="R"' not in text  # die festen Kürzel sind keine Eingabefelder
+    assert 'href="/"' in text

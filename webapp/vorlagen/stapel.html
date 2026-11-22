@@ -30,7 +30,8 @@
     {{- g.fertig }} von {{ g.seiten }} Seiten analysiert
     {%- if g.unterwegs %} · {{ g.unterwegs }} in Arbeit{% endif %}
     {%- if g.fehlgeschlagen %} · {{ g.fehlgeschlagen }} fehlgeschlagen{% endif %}
-    {%- if g.offen %} · {{ '1 offener Vorschlag' if g.offen == 1 else g.offen ~ ' offene Vorschläge' }}{% endif -%}
+    {%- if g.offen %} · {{ '1 offener Vorschlag' if g.offen == 1 else g.offen ~ ' offene Vorschläge' }}{% endif %}
+    {{- ' · ' ~ g.bestaetigt }} von {{ g.arbeiten }} Arbeiten bestätigt
   </p>
 </section>
 
@@ -48,6 +49,11 @@
         {%- if a.offen == 1 %}1 offener Vorschlag
         {%- elif a.offen %}{{ a.offen }} offene Vorschläge
         {%- elif a.status_gesamt == 'fertig' %}keine offenen Vorschläge
+        {%- endif -%}
+      </p>
+      <p data-rolle="bestaetigt">
+        {%- if a.bestaetigt_am %}<span class="status status-fertig">Korrektur bestätigt</span>
+        {%- elif a.status_gesamt == 'fertig' %}<span class="leise">Korrektur noch nicht bestätigt</span>
         {%- endif -%}
       </p>
       <ul class="fehlerliste" data-rolle="fehler">

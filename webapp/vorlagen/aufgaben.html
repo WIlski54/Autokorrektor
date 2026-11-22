@@ -3,7 +3,10 @@
 {% block inhalt %}
 <div class="titelzeile">
   <h1>Aufgaben</h1>
-  <a class="knopf haupt" href="{{ url_for('seiten.aufgabe_neu') }}">Neue Aufgabe</a>
+  <div class="knopfreihe oben">
+    <a class="knopf" href="{{ url_for('seiten.einstellungen_kuerzel') }}">Eigene Kürzel</a>
+    <a class="knopf haupt" href="{{ url_for('seiten.aufgabe_neu') }}">Neue Aufgabe</a>
+  </div>
 </div>
 
 <aside class="hinweis" aria-label="Hinweis zum Prototyp">
@@ -35,7 +38,7 @@
       <td>
         {% if a.seiten %}
           <progress max="{{ a.seiten }}" value="{{ a.seiten_fertig }}"></progress>
-          <span class="leise">{{ a.seiten_fertig }} von {{ a.seiten }} Seiten analysiert{% if a.seiten_fehlgeschlagen %}, {{ a.seiten_fehlgeschlagen }} fehlgeschlagen{% endif %}{% if a.offen %} · {{ a.offen }} offene Vorschläge{% endif %}</span>
+          <span class="leise">{{ a.seiten_fertig }} von {{ a.seiten }} Seiten analysiert{% if a.seiten_fehlgeschlagen %}, {{ a.seiten_fehlgeschlagen }} fehlgeschlagen{% endif %}{% if a.offen %} · {{ '1 offener Vorschlag' if a.offen == 1 else a.offen ~ ' offene Vorschläge' }}{% endif %} · {{ a.bestaetigt }} von {{ a.arbeiten }} Arbeiten bestätigt</span>
         {% else %}
           <span class="leise">noch keine Arbeiten</span>
         {% endif %}

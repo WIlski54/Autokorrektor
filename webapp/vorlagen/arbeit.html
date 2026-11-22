@@ -12,7 +12,16 @@
 {% block inhalt %}
 <div class="titelzeile">
   <div>
-    <h1>Arbeit <span data-rolle="arbeitskuerzel">{{ arbeit.kuerzel }}</span></h1>
+    <div class="kopfzeile">
+      <h1>Arbeit <span data-rolle="arbeitskuerzel">{{ arbeit.kuerzel }}</span></h1>
+      <button class="knopf klein" type="button" id="kuerzel-knopf">Umbenennen</button>
+      <form class="kuerzelformular" id="kuerzel-formular" novalidate hidden>
+        <label class="nur-vorlesen" for="kuerzel-feld">Kürzel der Arbeit (höchstens 20 Zeichen)</label>
+        <input id="kuerzel-feld" type="text" maxlength="20" autocomplete="off" spellcheck="false">
+        <button class="knopf klein haupt" type="submit">Speichern</button>
+        <button class="knopf klein" type="button" id="kuerzel-abbrechen">Abbrechen</button>
+      </form>
+    </div>
     <p class="leise unterzeile">
       Seite {{ nummer }} von {{ seitenzahl }} ·
       <span class="status status-{{ seite.analyse_status }}">{{ statustext[seite.analyse_status] }}</span>
@@ -43,10 +52,10 @@
 {% if seite.analyse_status == 'fehlgeschlagen' %}
 <p class="meldung fehler" role="alert">
   Die Analyse dieser Seite ist fehlgeschlagen: {{ seite.fehlermeldung or 'ohne nähere Angabe' }}
-  In der <a href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">Stapelansicht</a> lässt sie sich erneut versuchen.
+  Mit „Seite neu analysieren“ lässt sie sich erneut versuchen.
 </p>
 {% elif seite.analyse_status in ('wartet', 'laeuft') %}
-<p class="meldung">Die Analyse dieser Seite läuft noch. Bis sie fertig ist, lässt sich hier nichts ändern; die Vorschläge erscheinen nach dem Neuladen der Seite.</p>
+<p class="meldung" role="status">Die Analyse dieser Seite läuft noch. Bis sie fertig ist, lässt sich hier nichts ändern; danach lädt die Seite von selbst neu.</p>
 {% elif seite.analyse_status == 'neu' %}
 <p class="meldung">Diese Seite ist noch nicht analysiert.</p>
 {% endif %}
@@ -58,8 +67,6 @@
       <button class="knopf klein" type="button" id="zoom-einpassen">Einpassen</button>
       <button class="knopf klein" type="button" id="zoom-groesser" aria-label="Vergrößern">+</button>
       <span class="leise" id="zoom-anzeige" aria-live="polite">100 %</span>
-      <button class="knopf klein umschalter" type="button" id="setzen-knopf" aria-pressed="false">Zeichen setzen</button>
-      <span class="setzen-hinweis" id="setzen-hinweis" role="status" hidden>Rahmen im Bild aufziehen · Esc bricht ab</span>
     </div>
     <div class="rollfeld" id="rollfeld">
       <div class="buehne" id="buehne">
@@ -120,6 +127,71 @@
     </div>
   </section>
 </div>
+
+<div class="fussleiste korrekturleiste">
+  <div class="leistenteil">
+    <button class="knopf umschalter" type="button" id="setzen-knopf" aria-pressed="false">Zeichen setzen</button>
+    <span class="setzen-hinweis" id="setzen-hinweis" role="status" hidden>Rahmen im Bild aufziehen · Esc bricht ab</span>
+    <button class="knopf" type="button" id="rest-knopf">Rest bestätigen</button>
+    <button class="knopf" type="button" id="neu-analyse-knopf">Seite neu analysieren</button>
+  </div>
+  <div class="leistenteil">
+    <span class="leise" id="gesamt-grund"></span>
+    <button class="knopf haupt" type="button" id="gesamt-knopf" aria-describedby="gesamt-grund">Korrektur gesamt bestätigen</button>
+  </div>
+</div>
+
+<dialog id="rest-dialog" class="dialog" aria-labelledby="rest-titel">
+  <form method="dialog">
+    <h2 id="rest-titel">Rest bestätigen?</h2>
+    <p id="rest-text"></p>
+    <p class="leise">
+      Die Vorschläge gelten dann als gesammelt bestätigt, ohne dass Sie sie einzeln entschieden
+      haben. Jeder lässt sich danach weiter zurückholen, ändern oder verwerfen.
+    </p>
+    <div class="knopfreihe">
+      <button class="knopf" type="submit" value="nein" autofocus>Abbrechen</button>
+      <button class="knopf haupt" type="submit" value="ja" id="rest-ja">Alle bestätigen</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="gesamt-dialog" class="dialog" aria-labelledby="gesamt-titel">
+  <form method="dialog">
+    <h2 id="gesamt-titel">Korrektur der Arbeit <span data-rolle="arbeitskuerzel">{{ arbeit.kuerzel }}</span> bestätigen?</h2>
+    <dl class="zahlenliste">
+      <div><dt>einzeln bestätigt</dt><dd id="zahl-einzeln"></dd></div>
+      <div><dt>gesammelt bestätigt</dt><dd id="zahl-gesammelt"></dd></div>
+      <div><dt>geändert</dt><dd id="zahl-geaendert"></dd></div>
+      <div><dt>verworfen</dt><dd id="zahl-verworfen"></dd></div>
+      <div><dt>selbst gesetzt</dt><dd id="zahl-hand"></dd></div>
+    </dl>
+    <p>
+      <strong>Damit bestätigen Sie die Richtigkeit der gesamten Korrektur dieser Arbeit</strong>,
+      auch der gesammelt bestätigten Vorschläge. Ändern Sie später ein Zeichen, verfällt die
+      Bestätigung und ist neu zu geben.
+    </p>
+    <div class="knopfreihe">
+      <button class="knopf" type="submit" value="nein" autofocus>Abbrechen</button>
+      <button class="knopf haupt" type="submit" value="ja">Ja, Korrektur bestätigen</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="neu-analyse-dialog" class="dialog" aria-labelledby="neu-analyse-titel">
+  <form method="dialog">
+    <h2 id="neu-analyse-titel">Seite {{ nummer }} neu analysieren?</h2>
+    <p>
+      Das Foto der Seite geht erneut an den Analysedienst. Die offenen Vorschläge dieser Seite
+      werden ersetzt; bestätigte, verworfene und selbst gesetzte Zeichen bleiben erhalten.
+    </p>
+    <p class="leise">Eine Gesamtbestätigung der Arbeit verfällt dabei.</p>
+    <div class="knopfreihe">
+      <button class="knopf" type="submit" value="nein" autofocus>Abbrechen</button>
+      <button class="knopf haupt" type="submit" value="ja">Neu analysieren</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}
 {% block skripte %}
 <script type="application/json" id="arbeit-daten">{{ daten|tojson }}</script>

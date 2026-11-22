@@ -318,7 +318,7 @@ body.korrektur .titelzeile { align-items: center; margin-bottom: .75rem; }
 .ansicht { display: grid; grid-template-columns: minmax(0, 1fr) 23rem; gap: 1.25rem; align-items: start; }
 .werkzeuge { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; margin-bottom: .6rem; }
 .rollfeld {
-  max-height: calc(100vh - 15rem); min-height: 16rem; overflow: auto;
+  max-height: calc(100vh - 22rem); min-height: 16rem; overflow: auto;
   background: #e9e9e4; border: 1px solid var(--linie); border-radius: var(--rund);
 }
 .buehne { position: relative; width: 100%; }
@@ -392,7 +392,6 @@ kbd {
 .rahmenebene.setzen { cursor: crosshair; touch-action: none; user-select: none; }
 .rahmenebene.setzen .rahmen { pointer-events: none; }
 .rahmen.entwurf { border-style: solid; z-index: 4; background: color-mix(in srgb, var(--farbe) 18%, transparent); }
-.knopf.umschalter { margin-left: auto; }
 .knopf.umschalter[aria-pressed="true"] { background: var(--akzent); border-color: var(--akzent); color: #fff; }
 .setzen-hinweis { color: var(--akzent-dunkel); font-size: .9rem; font-weight: 600; }
 .setzen-hinweis[hidden] { display: none; }
@@ -413,6 +412,43 @@ kbd {
   font: inherit; font-weight: 400;
 }
 
+.kopfzeile { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.kuerzelformular { display: flex; align-items: center; gap: .4rem; }
+.kuerzelformular[hidden], .knopf[hidden] { display: none; }
+.kuerzelformular input {
+  width: 14rem; padding: .3rem .5rem;
+  border: 1px solid #b9b9b1; border-radius: 6px; background: #fff; color: var(--text); font: inherit;
+}
+
+.fussleiste.korrekturleiste { margin-top: .75rem; padding: .6rem .9rem; }
+.leistenteil { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.fussleiste.korrekturleiste .leise { margin: 0; max-width: 24rem; text-align: right; }
+
+.dialog {
+  width: min(34rem, calc(100vw - 2rem)); padding: 1.5rem;
+  border: 1px solid var(--linie); border-radius: var(--rund);
+  background: var(--flaeche); color: var(--text); box-shadow: 0 12px 40px rgba(0, 0, 0, .3);
+}
+.dialog::backdrop { background: rgba(31, 35, 40, .45); }
+.dialog h2 { margin: 0 0 .75rem; font-size: 1.25rem; }
+.dialog p { margin: 0 0 .75rem; }
+.dialog .knopfreihe { justify-content: flex-end; margin-top: 1.25rem; }
+.zahlenliste { margin: 0 0 1rem; border: 1px solid var(--linie); border-radius: 6px; }
+.zahlenliste div { display: flex; justify-content: space-between; gap: 1rem; padding: .4rem .8rem; }
+.zahlenliste div + div { border-top: 1px solid var(--linie); }
+.zahlenliste dt { color: var(--leise); }
+.zahlenliste dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.kuerzeltafel { display: grid; gap: .5rem; margin-bottom: 1.25rem; }
+.kuerzelzeile { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .75rem; align-items: center; }
+.kuerzelzeile.kopf { font-size: .85rem; font-weight: 600; color: var(--leise); }
+.kuerzelzeile.fest { min-height: 2.4rem; }
+.kuerzelzeile.fest .kuerzel { justify-self: start; min-width: 2.2rem; }
+.kuerzelzeile input {
+  width: 100%; min-width: 0; padding: .5rem .7rem;
+  border: 1px solid #b9b9b1; border-radius: 6px; background: #fff; color: var(--text); font: inherit;
+}
+
 .kat-R { --farbe: var(--kat-R); }
 .kat-Z { --farbe: var(--kat-Z); }
 .kat-Gr { --farbe: var(--kat-Gr); }
@@ -420,7 +456,7 @@ kbd {
 .kat-hand { --farbe: var(--kat-hand); }
 
 .listenspalte {
-  position: sticky; top: .75rem; max-height: calc(100vh - 1.5rem); overflow: auto;
+  position: sticky; top: .75rem; max-height: calc(100vh - 16rem); min-height: 16rem; overflow: auto;
   padding: .9rem; background: var(--flaeche);
   border: 1px solid var(--linie); border-radius: var(--rund); box-shadow: var(--schatten);
 }

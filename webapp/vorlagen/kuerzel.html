@@ -4,40 +4,44 @@
 <li aria-current="page">Eigene Kürzel</li>
 {% endblock %}
 {% block inhalt %}
-<h1>Eigene Kürzel</h1>
-<p class="leise">
-  Diese Kürzel stehen zur Wahl, wenn Sie ein Zeichen selbst setzen oder ändern.
-  {% for kuerzel, name in feste %}{{ kuerzel }} ({{ name }}){{ ', ' if not loop.last else '' }}{% endfor %}
-  gibt es immer; sie lassen sich hier nicht ändern.
-</p>
+<div class="titelzeile">
+  <div>
+    <h1>Eigene Kürzel</h1>
+    <p class="leise unterzeile">Diese Kürzel stehen zur Wahl, wenn Sie ein Zeichen selbst setzen oder ändern.</p>
+  </div>
+</div>
 
 {% if fehler %}
 <p class="meldung fehler" role="alert">{{ fehler }}</p>
 {% endif %}
 
 <form class="formular" method="post" novalidate>
+  <div class="kuerzeltafel">
+    <div class="kuerzelzeile kopf" aria-hidden="true"><span>Kürzel</span><span>Bezeichnung</span></div>
+    {% for kuerzel, name in feste %}
+    <div class="kuerzelzeile fest">
+      <span class="kuerzel kat-{{ kuerzel }}">{{ kuerzel }}</span>
+      <span>{{ name }} <span class="leise">· gibt es immer</span></span>
+    </div>
+    {% endfor %}
+    {% for zeile in zeilen %}
+    <div class="kuerzelzeile">
+      <input name="kuerzel" type="text" value="{{ zeile.kuerzel }}" aria-label="Kürzel {{ loop.index }}"
+             autocomplete="off" autocapitalize="off" spellcheck="false">
+      <input name="bezeichnung" type="text" value="{{ zeile.bezeichnung }}"
+             aria-label="Bezeichnung {{ loop.index }}" autocomplete="off">
+    </div>
+    {% endfor %}
+  </div>
   <p class="leise">
     Ein Kürzel hat 1 bis {{ kuerzel_laenge }} Buchstaben, die Bezeichnung höchstens
     {{ bezeichnung_laenge }} Zeichen. Eine geleerte Zeile entfernt das Kürzel aus der Liste;
-    schon gesetzte Zeichen mit diesem Kürzel bleiben bestehen.
+    schon gesetzte Zeichen mit diesem Kürzel bleiben bestehen. Für weitere Kürzel die leeren
+    Zeilen füllen; nach dem Speichern kommen neue leere Zeilen dazu.
   </p>
-  {% for zeile in zeilen %}
-  <div class="feldreihe">
-    <div class="feld schmal">
-      <label for="kuerzel-{{ loop.index }}">Kürzel{% if zeilen|length > 1 %} {{ loop.index }}{% endif %}</label>
-      <input id="kuerzel-{{ loop.index }}" name="kuerzel" type="text" value="{{ zeile.kuerzel }}"
-             autocomplete="off" autocapitalize="off" spellcheck="false">
-    </div>
-    <div class="feld">
-      <label for="bezeichnung-{{ loop.index }}">Bezeichnung{% if zeilen|length > 1 %} {{ loop.index }}{% endif %}</label>
-      <input id="bezeichnung-{{ loop.index }}" name="bezeichnung" type="text"
-             value="{{ zeile.bezeichnung }}" autocomplete="off">
-    </div>
-  </div>
-  {% endfor %}
   <div class="knopfreihe">
     <button class="knopf haupt" type="submit">Speichern</button>
-    <a class="knopf" href="{{ url_for('seiten.aufgaben') }}">Abbrechen</a>
+    <a class="knopf" href="{{ url_for('seiten.aufgaben') }}">Zurück zu den Aufgaben</a>
   </div>
 </form>
 {% endblock %}
