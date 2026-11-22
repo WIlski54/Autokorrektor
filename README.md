@@ -36,3 +36,19 @@ Testseiten. Es werden keine Schülerarbeiten verwendet.
 3. `python auswerten.py` schreibt `bericht.html`.
 
 Fotos, Ergebnisse, Klicks und Bericht bleiben lokal und werden nicht ins Repository aufgenommen.
+
+## Web-App starten (Prototyp, Etappe 1)
+
+Die Web-App läuft lokal auf dem eigenen Rechner, ohne Login.
+
+1. Einrichten wie oben (virtuelle Umgebung, `.env` mit Schlüsseln, `einstellungen.toml`).
+2. `python start.py` startet die App und öffnet `http://127.0.0.1:5001` im Browser.
+3. Aufgabe anlegen (Fach, Jahrgang, Fehlerarten, Verfahren), Fotos hochladen, per Trennmarke
+   zu Arbeiten verbinden und die Analyse starten. Die Stapelansicht zeigt den Fortschritt.
+
+Stand von Etappe 1: Die Vorschläge der KI lassen sich ansehen, aber noch nicht bearbeiten,
+freigeben oder ausgeben. Datenbank und Fotos liegen im Ordner `daten/` und werden nicht ins
+Repository aufgenommen. Die App lässt sich nur einmal gleichzeitig starten.
+
+Der Prototyp ist für eigene Texte gedacht. Vor echten Schülerarbeiten sind Verarbeitungsort,
+Auftragsverarbeitung und Genehmigung zu klären.
