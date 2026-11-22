@@ -58,6 +58,8 @@
       <button class="knopf klein" type="button" id="zoom-einpassen">Einpassen</button>
       <button class="knopf klein" type="button" id="zoom-groesser" aria-label="Vergrößern">+</button>
       <span class="leise" id="zoom-anzeige" aria-live="polite">100 %</span>
+      <button class="knopf klein umschalter" type="button" id="setzen-knopf" aria-pressed="false">Zeichen setzen</button>
+      <span class="setzen-hinweis" id="setzen-hinweis" role="status" hidden>Rahmen im Bild aufziehen · Esc bricht ab</span>
     </div>
     <div class="rollfeld" id="rollfeld">
       <div class="buehne" id="buehne">
@@ -70,11 +72,13 @@
     <p class="tasten" aria-label="Tastenbelegung">
       <span><kbd>N</kbd> <kbd>Tab</kbd> nächster offener</span>
       <span><kbd>B</kbd> <kbd>Enter</kbd> bestätigen</span>
-      <span><kbd>V</kbd> <kbd>Entf</kbd> verwerfen</span>
+      <span><kbd>V</kbd> <kbd>Entf</kbd> verwerfen (Entf löscht ein eigenes Zeichen)</span>
       <span><kbd>Z</kbd> zurückholen</span>
+      <span><kbd>E</kbd> ändern</span>
+      <span><kbd>S</kbd> Zeichen setzen</span>
       <span><kbd>←</kbd> <kbd>→</kbd> Seite</span>
       <span><kbd>Bild↑</kbd> <kbd>Bild↓</kbd> Arbeit</span>
-      <span><kbd>Esc</kbd> Auswahl aufheben</span>
+      <span><kbd>Esc</kbd> abbrechen</span>
     </p>
   </section>
 
@@ -85,6 +89,23 @@
       <input type="checkbox" id="verworfene-zeigen">
       <span>Verworfene zeigen <span id="verworfen-zahl" class="leise"></span></span>
     </label>
+    <form class="zeichenformular neu" id="neu-formular" novalidate hidden>
+      <h3>Neues Zeichen</h3>
+      <label class="formfeld"><span>Kürzel</span><select id="neu-kuerzel"></select></label>
+      <label class="formfeld"><span>Art</span>
+        <select id="neu-typ">
+          <option value="wort">Wort oder Stelle markieren</option>
+          <option value="luecke">fehlendes Zeichen (Lücke)</option>
+        </select>
+      </label>
+      <label class="formfeld"><span>Vorschlag (kann leer bleiben)</span>
+        <input id="neu-vorschlag" type="text" maxlength="200" autocomplete="off">
+      </label>
+      <div class="eintrag-knoepfe">
+        <button class="knopf klein haupt" type="submit" id="neu-setzen">Setzen</button>
+        <button class="knopf klein" type="button" id="neu-abbrechen">Abbrechen</button>
+      </div>
+    </form>
     <ol class="zeichenliste" id="zeichenliste"></ol>
     <p class="leise" id="liste-leer" hidden>
       {%- if seite.analyse_status == 'fertig' %}Auf dieser Seite steht kein Zeichen.

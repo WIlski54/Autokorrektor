@@ -1,5 +1,6 @@
-// Korrekturansicht: Rahmen der Zeichen über dem Foto, Liste daneben, Entscheiden per Maus
-// und Tastatur. Jede Änderung wird sofort gespeichert; schlägt das Speichern fehl, kehrt die
+// Korrekturansicht: Rahmen der Zeichen über dem Foto, Liste daneben. Entscheiden, Ändern,
+// Verschieben und eigene Zeichen per Maus, Stift, Finger und Tastatur.
+// Jede Änderung wird sofort gespeichert; schlägt das Speichern fehl, kehrt die
 // Anzeige zum vorherigen Zustand zurück.
 // Die Rahmen stehen in Prozent der Bildgröße; Fenstergröße und Zoom brauchen keine Umrechnung.
 (function () {
@@ -17,6 +18,7 @@
   var daten = JSON.parse($("arbeit-daten").textContent);
   var seite = daten.seite;
   var arbeit = daten.arbeit;
+  var foto = $("foto");
   var ebene = $("rahmenebene");
   var buehne = $("buehne");
   var rollfeld = $("rollfeld");
@@ -32,6 +34,15 @@
   var gewaehlt = null;
   var verworfeneZeigen = false;
   var zoom = 100;
+  var zug = null;          // laufendes Verschieben oder Größe-Ändern eines Rahmens
+  var formularFuer = null; // id des Zeichens, dessen Formular „Ändern“ offen ist
+  var setzen = false;      // Modus „Zeichen setzen“
+  var aufzug = null;       // laufendes Aufziehen eines neuen Rahmens
+  var entwurf = null;      // {lage, element} des aufgezogenen, noch nicht gespeicherten Rahmens
+  var letztesKuerzel = null;
+  var MINDESTKANTE = 4;    // Pixel des Bildes, wie in den Regeln
+  var KLEINSTER_ENTWURF = 6;
+  var SCHWELLE = 3;        // Bildschirmpixel; darunter gilt ein Zeigerdruck als Klick
   var folge = 0;           // laufende Nummer der Anfragen
   var angewandt = 0;       // Nummer der Anfrage, deren Stand der Arbeit zuletzt gezeigt wurde
   var seitenstatus = "fertig";
@@ -155,17 +166,107 @@
     e.setAttribute("role", "button");
     e.tabIndex = -1;  // per Klick fokussierbar; der Weg mit der Tastatur führt über die Liste
     e.appendChild(el("span", "etikett"));
+    ["nw", "ne", "sw", "se"].forEach(function (ecke) {
+      e.appendChild(el("span", "griffpunkt " + ecke)).setAttribute("data-ecke", ecke);
+    });
     rahmenAnschliessen(e, z.id);
     return e;
   }
 
   function rahmenAnschliessen(e, id) {
-    e.addEventListener("click", function (ereignis) {
-      ereignis.stopPropagation();
-      waehlen(id, "bild");
-    });
+    e.addEventListener("pointerdown", function (ereignis) { zugBeginnen(ereignis, id); });
+    e.addEventListener("pointermove", zugBewegen);
+    e.addEventListener("pointerup", function (ereignis) { zugBeenden(ereignis, true); });
+    e.addEventListener("pointercancel", function (ereignis) { zugBeenden(ereignis, false); });
     e.addEventListener("mouseenter", function () { nah(id, true); });
     e.addEventListener("mouseleave", function () { nah(id, false); });
+  }
+
+  // Die Stelle des Zeigers in Pixeln des Bildes; stimmt bei jedem Zoom und nach dem Rollen,
+  // weil sie aus der Lage des Bildes im Fenster gerechnet wird.
+  function bildpunkt(ereignis) {
+    var r = foto.getBoundingClientRect();
+    return { x: (ereignis.clientX - r.left) * seite.breite / r.width,
+             y: (ereignis.clientY - r.top) * seite.hoehe / r.height };
+  }
+
+  function klemmen(wert, von, bis) {
+    return Math.max(von, Math.min(bis, wert));
+  }
+
+  function zugBeginnen(ereignis, id) {
+    var z = zeichen[id];
+    if (!z || zug !== null || setzen) { return; }
+    if (ereignis.pointerType === "mouse" && ereignis.button !== 0) { return; }
+    // Mit dem Finger lässt sich nur der gewählte Rahmen bewegen; sonst rollt der Finger das Bild.
+    var beweglich = !gesperrt && !unterwegs[id] && z.status !== "verworfen" &&
+      (ereignis.pointerType !== "touch" || gewaehlt === id);
+    zug = { id: id, zeiger: ereignis.pointerId, element: rahmen[id],
+            art: ereignis.target.getAttribute("data-ecke") || "mitte",
+            start: bildpunkt(ereignis), ort: { x: ereignis.clientX, y: ereignis.clientY },
+            lage: { x: z.x, y: z.y, breite: z.breite, hoehe: z.hoehe },
+            neu: null, bewegt: false, beweglich: beweglich };
+    try { zug.element.setPointerCapture(ereignis.pointerId); } catch (fehler) { /* Zeiger schon weg */ }
+  }
+
+  function zugBewegen(ereignis) {
+    if (zug === null || ereignis.pointerId !== zug.zeiger) { return; }
+    if (!zug.bewegt) {
+      var weg = Math.hypot(ereignis.clientX - zug.ort.x, ereignis.clientY - zug.ort.y);
+      if (weg < SCHWELLE || !zug.beweglich) { return; }
+      zug.bewegt = true;
+      zug.element.classList.add("gezogen");
+    }
+    var p = bildpunkt(ereignis);
+    var dx = p.x - zug.start.x;
+    var dy = p.y - zug.start.y;
+    var links = zug.lage.x, oben = zug.lage.y;
+    var rechts = links + zug.lage.breite, unten = oben + zug.lage.hoehe;
+    if (zug.art === "mitte") {
+      links = klemmen(links + dx, 0, seite.breite - zug.lage.breite);
+      oben = klemmen(oben + dy, 0, seite.hoehe - zug.lage.hoehe);
+      rechts = links + zug.lage.breite;
+      unten = oben + zug.lage.hoehe;
+    } else {
+      if (zug.art.charAt(1) === "w") {
+        links = klemmen(links + dx, 0, rechts - MINDESTKANTE);
+      } else {
+        rechts = klemmen(rechts + dx, links + MINDESTKANTE, seite.breite);
+      }
+      if (zug.art.charAt(0) === "n") {
+        oben = klemmen(oben + dy, 0, unten - MINDESTKANTE);
+      } else {
+        unten = klemmen(unten + dy, oben + MINDESTKANTE, seite.hoehe);
+      }
+    }
+    var x = Math.round(links), y = Math.round(oben);
+    zug.neu = { x: x, y: y, breite: Math.max(MINDESTKANTE, Math.round(rechts) - x),
+                hoehe: Math.max(MINDESTKANTE, Math.round(unten) - y) };
+    rahmenLegen(zug.element, zug.neu);
+  }
+
+  // Loslassen: ohne Bewegung nur auswählen, sonst den neuen Rahmen speichern.
+  function zugBeenden(ereignis, gueltig) {
+    if (zug === null || ereignis.pointerId !== zug.zeiger) { return; }
+    var ende = zug;
+    zug = null;
+    ende.element.classList.remove("gezogen");
+    try { ende.element.releasePointerCapture(ereignis.pointerId); } catch (fehler) { /* schon frei */ }
+    var z = zeichen[ende.id];
+    if (!z) { return; }
+    if (!gueltig) {
+      rahmenLegen(ende.element, z);
+      return;
+    }
+    if (gewaehlt !== ende.id) { waehlen(ende.id, "bild"); }
+    ende.element.focus({ preventScroll: true });
+    if (!ende.bewegt || ende.neu === null) { return; }
+    var n = ende.neu;
+    if (n.x === z.x && n.y === z.y && n.breite === z.breite && n.hoehe === z.hoehe) {
+      rahmenLegen(ende.element, z);
+      return;
+    }
+    if (!speichern(ende.id, "rahmen", n, n, false)) { rahmenLegen(ende.element, z); }
   }
 
   function rahmenLegen(e, lage) {
@@ -188,8 +289,8 @@
   }
 
   // Ob der Rahmen gerade mit dem Zeiger bewegt wird (dann bleibt seine Lage unberührt).
-  function wirdGezogen() {
-    return false;
+  function wirdGezogen(id) {
+    return zug !== null && zug.id === id && zug.bewegt;
   }
 
   function nah(id, an) {
@@ -201,13 +302,15 @@
 
   // Die Knöpfe eines Listenpunkts als [Aktion, Beschriftung, Klasse].
   function aktionenFuer(z) {
-    if (gesperrt) { return []; }
-    if (z.herkunft === "hand") { return []; }
+    if (gesperrt || formularFuer === z.id) { return []; }
+    if (z.herkunft === "hand") {
+      return [["aendern", "Ändern"], ["loeschen", "Löschen", "gefahr"]];
+    }
     if (z.status === "offen") {
-      return [["bestaetigen", "Bestätigen"], ["verwerfen", "Verwerfen"]];
+      return [["bestaetigen", "Bestätigen"], ["verwerfen", "Verwerfen"], ["aendern", "Ändern"]];
     }
     if (z.status === "verworfen") { return [["zurueckholen", "Zurückholen"]]; }
-    return [["zurueckholen", "Zurückholen"], ["verwerfen", "Verwerfen"]];
+    return [["zurueckholen", "Zurückholen"], ["verwerfen", "Verwerfen"], ["aendern", "Ändern"]];
   }
 
   function eintragBauen(z) {
@@ -258,13 +361,136 @@
     return punkt;
   }
 
-  // Platz für das Formular „Ändern“ (siehe unten).
-  function eintragErgaenzen() {}
+  // Hängt das Formular „Ändern“ an, wenn es für dieses Zeichen offen ist.
+  function eintragErgaenzen(punkt, z) {
+    if (formularFuer === z.id) { punkt.appendChild(aendernFormular(z)); }
+  }
+
+  // Auswahlfeld mit R, Z, Gr und den eigenen Kürzeln; ein Kürzel, das nicht mehr in der
+  // Liste steht, bleibt als bisheriger Wert wählbar.
+  function kuerzelFuellen(feld, aktuell) {
+    feld.textContent = "";
+    var bekannt = false;
+    daten.kuerzel.forEach(function (k) {
+      var wahl = el("option", null, k.kuerzel + " – " + k.bezeichnung);
+      wahl.value = k.kuerzel;
+      feld.appendChild(wahl);
+      bekannt = bekannt || k.kuerzel === aktuell;
+    });
+    if (aktuell !== null && !bekannt) {
+      var alt = el("option", null, aktuell + " (nicht mehr in der Liste)");
+      alt.value = aktuell;
+      feld.appendChild(alt);
+    }
+    if (aktuell !== null) { feld.value = aktuell; }
+  }
+
+  function beschriftet(text, feld) {
+    var rahmung = el("label", "formfeld");
+    rahmung.appendChild(el("span", null, text));
+    rahmung.appendChild(feld);
+    return rahmung;
+  }
+
+  // Im Formular bricht Esc ab; Enter schickt es auch aus einem Auswahlfeld ab.
+  function formularTasten(formular, abbruch) {
+    formular.addEventListener("keydown", function (ereignis) {
+      if (ereignis.key === "Escape") {
+        ereignis.preventDefault();
+        ereignis.stopPropagation();
+        abbruch();
+      } else if (ereignis.key === "Enter" && ereignis.target.tagName === "SELECT") {
+        ereignis.preventDefault();
+        formular.requestSubmit();
+      }
+    });
+  }
+
+  function aendernFormular(z) {
+    var formular = el("form", "zeichenformular");
+    formular.noValidate = true;
+    var kuerzel = el("select");
+    kuerzelFuellen(kuerzel, z.kategorie);
+    var vorschlag = el("input");
+    vorschlag.type = "text";
+    vorschlag.maxLength = 200;
+    vorschlag.autocomplete = "off";
+    vorschlag.value = z.vorschlag || "";
+    formular.appendChild(beschriftet("Kürzel", kuerzel));
+    formular.appendChild(beschriftet("Vorschlag", vorschlag));
+    var reihe = el("div", "eintrag-knoepfe");
+    var sichern = el("button", "knopf klein haupt", "Speichern");
+    sichern.type = "submit";
+    var zu = el("button", "knopf klein", "Abbrechen");
+    zu.type = "button";
+    zu.addEventListener("click", function () { aendernSchliessen(true); });
+    reihe.appendChild(sichern);
+    reihe.appendChild(zu);
+    formular.appendChild(reihe);
+    if (z.herkunft === "ki" && z.status === "offen") {
+      formular.appendChild(el("p", "leise", "Ein geänderter Vorschlag gilt als bestätigt."));
+    }
+    formular.addEventListener("submit", function (ereignis) {
+      ereignis.preventDefault();
+      aendernSpeichern(z.id, kuerzel.value, vorschlag.value.trim());
+    });
+    formularTasten(formular, function () { aendernSchliessen(true); });
+    return formular;
+  }
+
+  function eintragFokus(id) {
+    if (eintraege[id]) { eintraege[id].querySelector(".eintrag-wahl").focus({ preventScroll: true }); }
+  }
+
+  function aendernOeffnen(id) {
+    var z = zeichen[id];
+    if (!z || gesperrt || unterwegs[id]) { return; }
+    if (z.status === "verworfen") {
+      melden("Dieser Vorschlag ist verworfen. Zum Ändern bitte erst zurückholen (Taste Z).", "hinweis");
+      return;
+    }
+    if (setzen) { setzenStellen(false); }
+    if (gewaehlt !== id) { waehlen(id, "liste"); }
+    formularFuer = id;
+    zeichnen(id);
+    inSicht($("listenspalte"), eintraege[id], false);
+    eintraege[id].querySelector("select").focus({ preventScroll: true });
+  }
+
+  function aendernSchliessen(mitFokus) {
+    var id = formularFuer;
+    if (id === null) { return; }
+    formularFuer = null;
+    zeichnen(id);
+    if (mitFokus) { eintragFokus(id); }
+  }
+
+  function aendernSpeichern(id, kategorie, vorschlag) {
+    var z = zeichen[id];
+    if (!z) { return; }
+    var koerper = {};
+    if (kategorie !== z.kategorie) { koerper.kategorie = kategorie; }
+    if (vorschlag !== (z.vorschlag || "")) { koerper.vorschlag = vorschlag; }
+    if (!Object.keys(koerper).length) {
+      aendernSchliessen(true);
+      return;
+    }
+    var vorlaeufig = kopie(koerper);
+    var warOffen = z.herkunft === "ki" && z.status === "offen";
+    if (z.herkunft === "ki") {
+      vorlaeufig.status = "bestaetigt";
+      vorlaeufig.bestaetigt_wie = "geaendert";
+    }
+    formularFuer = null;
+    if (!speichern(id, "aendern", vorlaeufig, koerper, warOffen)) { zeichnen(id); }
+    if (gewaehlt === id) { eintragFokus(id); }
+  }
 
   // Zeichnet Rahmen und Listenpunkt eines Zeichens neu; der Fokus bleibt, wo er war.
   function zeichnen(id) {
     var z = zeichen[id];
     if (!z) {
+      if (formularFuer === id) { formularFuer = null; }
       if (rahmen[id]) { rahmen[id].remove(); delete rahmen[id]; }
       if (eintraege[id]) { eintraege[id].remove(); delete eintraege[id]; }
       return;
@@ -397,8 +623,10 @@
     }
   }
 
-  // Platz für das Schließen eines offenen Formulars beim Wechsel der Auswahl.
-  function auswahlGewechselt() {}
+  // Das Formular „Ändern“ gehört zum gewählten Zeichen; wechselt die Auswahl, schließt es sich.
+  function auswahlGewechselt() {
+    if (formularFuer !== null && formularFuer !== gewaehlt) { aendernSchliessen(false); }
+  }
 
   // Der nächste offene Vorschlag der Seite nach dem genannten Zeichen (rundum); sonst null.
   function naechsterOffener(nach) {
@@ -525,12 +753,43 @@
     speichern(id, "zurueckholen", { status: "offen", bestaetigt_wie: null });
   }
 
-  // Die Taste Entf: verwirft einen Vorschlag der KI (eigene Zeichen siehe unten).
-  function entfernen(id) {
-    verwerfen(id);
+  // Löscht ein eigenes Zeichen; scheitert das Speichern, steht es wieder da.
+  function loeschen(id) {
+    var z = zeichen[id];
+    if (!z || unterwegs[id] || gesperrt) { return; }
+    if (z.herkunft !== "hand") {
+      melden("Vorschläge der KI werden verworfen, nicht gelöscht (Taste V).", "hinweis");
+      return;
+    }
+    var nummer = ++folge;
+    var ziel = naechsterOffener(id);
+    unterwegs[id] = true;
+    delete zeichen[id];
+    zeichnen(id);
+    zahlenZeigen();
+    if (gewaehlt === id) { waehlen(ziel, "taste"); }
+    senden("POST", "/zeichen/" + id + "/loeschen").then(function (antwort) {
+      delete unterwegs[id];
+      arbeitStellen(antwort.arbeit, nummer);
+    }, function (fehler) {
+      delete unterwegs[id];
+      zeichen[id] = z;
+      zeichnen(id);
+      listeOrdnen();
+      zahlenZeigen();
+      melden(fehlertext(fehler));
+      waehlen(id, "taste");
+    });
   }
 
-  var AKTIONEN = { bestaetigen: bestaetigen, verwerfen: verwerfen, zurueckholen: zurueckholen };
+  // Die Taste Entf: verwirft einen Vorschlag der KI, löscht ein eigenes Zeichen.
+  function entfernen(id) {
+    var z = zeichen[id];
+    if (z && z.herkunft === "hand") { loeschen(id); } else { verwerfen(id); }
+  }
+
+  var AKTIONEN = { bestaetigen: bestaetigen, verwerfen: verwerfen, zurueckholen: zurueckholen,
+                   aendern: aendernOeffnen, loeschen: loeschen };
 
   liste.addEventListener("click", function (ereignis) {
     var knopf = ereignis.target.closest("[data-akt]");
@@ -567,6 +826,122 @@
     allesZeichnen();
   });
 
+  // --- Zeichen selbst setzen -----------------------------------------------------------------
+
+  var setzenKnopf = $("setzen-knopf");
+  var neuFormular = $("neu-formular");
+
+  function entwurfVerwerfen() {
+    if (entwurf !== null) { entwurf.element.remove(); }
+    entwurf = null;
+    aufzug = null;
+    neuFormular.hidden = true;
+  }
+
+  function setzenStellen(an) {
+    if (an && gesperrt) { return; }
+    setzen = an;
+    ebene.classList.toggle("setzen", an);
+    setzenKnopf.setAttribute("aria-pressed", an ? "true" : "false");
+    $("setzen-hinweis").hidden = !an;
+    if (an) { aendernSchliessen(false); } else { entwurfVerwerfen(); }
+  }
+
+  function entwurfLage(a, b) {
+    var x = Math.round(Math.min(a.x, b.x)), y = Math.round(Math.min(a.y, b.y));
+    return { x: x, y: y, breite: Math.round(Math.max(a.x, b.x)) - x,
+             hoehe: Math.round(Math.max(a.y, b.y)) - y };
+  }
+
+  function imBild(p) {
+    return { x: klemmen(p.x, 0, seite.breite), y: klemmen(p.y, 0, seite.hoehe) };
+  }
+
+  ebene.addEventListener("pointerdown", function (ereignis) {
+    if (!setzen || aufzug !== null || $("neu-setzen").disabled) { return; }
+    if (ereignis.pointerType === "mouse" && ereignis.button !== 0) { return; }
+    ereignis.preventDefault();
+    entwurfVerwerfen();
+    var element = el("div", "rahmen kat-hand entwurf");
+    element.appendChild(el("span", "etikett", "neu"));
+    ebene.appendChild(element);
+    var start = imBild(bildpunkt(ereignis));
+    aufzug = { zeiger: ereignis.pointerId, start: start };
+    entwurf = { element: element, lage: entwurfLage(start, start) };
+    rahmenLegen(element, entwurf.lage);
+    try { ebene.setPointerCapture(ereignis.pointerId); } catch (fehler) { /* Zeiger schon weg */ }
+  });
+
+  ebene.addEventListener("pointermove", function (ereignis) {
+    if (aufzug === null || ereignis.pointerId !== aufzug.zeiger) { return; }
+    entwurf.lage = entwurfLage(aufzug.start, imBild(bildpunkt(ereignis)));
+    rahmenLegen(entwurf.element, entwurf.lage);
+  });
+
+  function aufzugBeenden(ereignis, gueltig) {
+    if (aufzug === null || ereignis.pointerId !== aufzug.zeiger) { return; }
+    aufzug = null;
+    try { ebene.releasePointerCapture(ereignis.pointerId); } catch (fehler) { /* schon frei */ }
+    if (!gueltig) {
+      entwurfVerwerfen();
+      return;
+    }
+    if (entwurf.lage.breite < KLEINSTER_ENTWURF || entwurf.lage.hoehe < KLEINSTER_ENTWURF) {
+      entwurfVerwerfen();
+      melden("Der Rahmen ist zu klein. Bitte mit gedrückter Taste einen größeren Rahmen aufziehen.",
+        "hinweis");
+      return;
+    }
+    kuerzelFuellen($("neu-kuerzel"), letztesKuerzel);
+    $("neu-vorschlag").value = "";
+    neuFormular.hidden = false;
+    inSicht($("listenspalte"), neuFormular, false);
+    $("neu-kuerzel").focus({ preventScroll: true });
+  }
+
+  ebene.addEventListener("pointerup", function (ereignis) { aufzugBeenden(ereignis, true); });
+  ebene.addEventListener("pointercancel", function (ereignis) { aufzugBeenden(ereignis, false); });
+
+  neuFormular.addEventListener("submit", function (ereignis) {
+    ereignis.preventDefault();
+    if (entwurf === null || $("neu-setzen").disabled) { return; }
+    var nummer = ++folge;
+    var lage = entwurf.lage;
+    var koerper = { kategorie: $("neu-kuerzel").value, typ: $("neu-typ").value,
+                    x: lage.x, y: lage.y, breite: lage.breite, hoehe: lage.hoehe };
+    var vorschlag = $("neu-vorschlag").value.trim();
+    if (vorschlag) { koerper.vorschlag = vorschlag; }
+    $("neu-setzen").disabled = true;
+    senden("POST", "/seite/" + seite.id + "/zeichen", koerper).then(function (antwort) {
+      $("neu-setzen").disabled = false;
+      letztesKuerzel = koerper.kategorie;
+      setzenStellen(false);
+      arbeitStellen(antwort.arbeit, nummer);
+      var z = antwort.zeichen;
+      if (!z) { return; }
+      zeichen[z.id] = z;
+      zeichnen(z.id);
+      listeOrdnen();
+      zahlenZeigen();
+      waehlen(z.id, "taste");
+    }, function (fehler) {
+      $("neu-setzen").disabled = false;
+      melden(fehlertext(fehler));
+      if (!neuFormular.hidden) { $("neu-kuerzel").focus({ preventScroll: true }); }
+    });
+  });
+
+  function setzenAbbrechen() {
+    setzenStellen(false);
+    setzenKnopf.focus({ preventScroll: true });
+  }
+
+  formularTasten(neuFormular, setzenAbbrechen);
+  $("neu-abbrechen").addEventListener("click", setzenAbbrechen);
+  setzenKnopf.addEventListener("click", function () { setzenStellen(!setzen); });
+  setzenKnopf.disabled = gesperrt;
+  ebene.classList.toggle("lesend", gesperrt);
+
   // --- Zoom: die Bühne wird breiter als das Rollfeld, die Prozentwerte wachsen mit ----------
 
   function zoomStellen(wert) {
@@ -590,15 +965,24 @@
     return Boolean(ziel && ziel.href);
   }
 
-  // Esc räumt von innen nach außen auf: erst die Meldung, dann die Auswahl.
+  // Esc räumt von innen nach außen auf: Modus „Zeichen setzen“, Formular, Meldung, Auswahl.
   function abbrechen() {
+    if (setzen) { setzenStellen(false); return; }
+    if (formularFuer !== null) { aendernSchliessen(true); return; }
     if (!meldung.hidden) { meldungSchliessen(); return; }
     waehlen(null);
   }
 
-  // Weitere Tasten (siehe unten); gibt true zurück, wenn die Taste verbraucht ist.
-  function weitereTaste() {
-    return false;
+  // Weitere Tasten; gibt true zurück, wenn die Taste verbraucht ist.
+  function weitereTaste(taste) {
+    if (taste === "e") {
+      aendernOeffnen(gewaehlt);
+    } else if (taste === "s") {
+      setzenStellen(!setzen);
+    } else {
+      return false;
+    }
+    return true;
   }
 
   document.addEventListener("keydown", function (ereignis) {

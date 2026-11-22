@@ -372,6 +372,47 @@ kbd {
 .rahmen.verworfen .etikett { background: var(--kat-sonst); text-decoration: line-through; }
 .rahmen.gewaehlt .etikett { opacity: 1; left: -3px; }
 
+.rahmen { touch-action: pan-x pan-y; }
+.rahmen.gewaehlt:not(.verworfen) { cursor: move; touch-action: none; }
+.rahmen.gezogen { opacity: .85; }
+.griffpunkt {
+  display: none; position: absolute; width: 12px; height: 12px;
+  border: 2px solid #fff; border-radius: 50%; background: var(--farbe);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .5); touch-action: none;
+}
+.griffpunkt::after { content: ""; position: absolute; inset: -7px; }
+.rahmen.gewaehlt:not(.verworfen) .griffpunkt { display: block; }
+.griffpunkt.nw { left: -8px; top: -8px; cursor: nwse-resize; }
+.griffpunkt.ne { right: -8px; top: -8px; cursor: nesw-resize; }
+.griffpunkt.sw { left: -8px; bottom: -8px; cursor: nesw-resize; }
+.griffpunkt.se { right: -8px; bottom: -8px; cursor: nwse-resize; }
+.rahmenebene.lesend .griffpunkt { display: none; }
+.rahmenebene.lesend .rahmen { cursor: pointer; }
+
+.rahmenebene.setzen { cursor: crosshair; touch-action: none; user-select: none; }
+.rahmenebene.setzen .rahmen { pointer-events: none; }
+.rahmen.entwurf { border-style: solid; z-index: 4; background: color-mix(in srgb, var(--farbe) 18%, transparent); }
+.knopf.umschalter { margin-left: auto; }
+.knopf.umschalter[aria-pressed="true"] { background: var(--akzent); border-color: var(--akzent); color: #fff; }
+.setzen-hinweis { color: var(--akzent-dunkel); font-size: .9rem; font-weight: 600; }
+.setzen-hinweis[hidden] { display: none; }
+
+.zeichenformular { display: grid; gap: .5rem; padding: .25rem .6rem .6rem; }
+.zeichenformular[hidden] { display: none; }
+.zeichenformular .eintrag-knoepfe { padding: 0; }
+.zeichenformular p { margin: 0; font-size: .82rem; }
+.zeichenformular.neu {
+  margin-bottom: .75rem; padding: .7rem;
+  border: 1px solid var(--kat-hand); border-left-width: 4px; border-radius: 6px; background: #f1f8f7;
+}
+.zeichenformular h3 { margin: 0; font-size: 1rem; }
+.formfeld { display: grid; gap: .15rem; font-size: .85rem; font-weight: 600; }
+.formfeld select, .formfeld input {
+  width: 100%; min-width: 0; padding: .35rem .5rem;
+  border: 1px solid #b9b9b1; border-radius: 6px; background: #fff; color: var(--text);
+  font: inherit; font-weight: 400;
+}
+
 .kat-R { --farbe: var(--kat-R); }
 .kat-Z { --farbe: var(--kat-Z); }
 .kat-Gr { --farbe: var(--kat-Gr); }
