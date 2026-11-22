@@ -67,3 +67,37 @@ def test_kaputter_fund_wird_verworfen_statt_seite_ausfallen_zu_lassen(tmp_path):
     assert erg["fehlermeldung"] is None and erg["verworfen"] == 2
     assert [(f["id"], f["kategorie"], f["gelesen"]) for f in erg["funde"]] == [(1, "Gr", "")]
     assert erg["transkription"] == ""
+
+
+def test_aufgabe_wird_an_die_anweisung_durchgereicht(tmp_path):
+    texte = []
+
+    def fragen(anweisung, jpeg, modell):
+        texte.append(anweisung)
+        return ANTWORT, {"eingabe": 1, "ausgabe": 1}
+
+    aufgabe = {"fach": "Englisch", "jahrgang": 7, "kategorien": ["R"]}
+    allein.ausfuehren(_foto(tmp_path), "gpt", "m", "h", anteil_zu_pixel, fragen, 2400,
+                      aufgabe=aufgabe)
+    allein.ausfuehren(_foto(tmp_path), "gpt", "m", "h", anteil_zu_pixel, fragen, 2400)
+    assert "im Fach Englisch, Jahrgang 7" in texte[0]
+    assert "Z (Zeichensetzung)" not in texte[0]
+    assert "im Fach Deutsch, Jahrgang 9" in texte[1] and "Z (Zeichensetzung)" in texte[1]
+
+
+def test_verfahren_reichen_aufgabe_aus_den_einstellungen_durch(tmp_path, monkeypatch):
+    from korrektor.verfahren import claude, gemini, gpt
+    aufgabe = {"fach": "Englisch", "jahrgang": 7, "kategorien": ["R"]}
+    einst = {"modelle": {"gemini": "m", "gpt": "m", "claude": "m"}, "max_kante": 2400}
+    for modul in (gemini, gpt, claude):
+        texte = []
+
+        def fragen(anweisung, jpeg, modell, texte=texte):
+            texte.append(anweisung)
+            return ANTWORT, {"eingabe": 1, "ausgabe": 1}
+
+        monkeypatch.setattr(modul, "fragen", fragen)
+        modul.ausfuehren(_foto(tmp_path), {**einst, "aufgabe": aufgabe})
+        modul.ausfuehren(_foto(tmp_path), einst)
+        assert "im Fach Englisch, Jahrgang 7" in texte[0], modul.NAME
+        assert "im Fach Deutsch, Jahrgang 9" in texte[1], modul.NAME

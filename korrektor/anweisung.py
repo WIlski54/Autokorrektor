@@ -1,5 +1,6 @@
 """Gemeinsame Anweisung für die Verfahren 1–3 und JSON-Auslesen."""
 import json
+import re
 
 RAHMEN_GEMINI = ('"rahmen" ist [ymin, xmin, ymax, xmax], normiert auf 0 bis 1000 '
                  "bezogen auf Bildhöhe und Bildbreite.")
@@ -29,8 +30,36 @@ Bei "luecke" enthalten "gelesen" und "vorschlag" die beiden Nachbarwörter, einm
 einmal mit dem Satzzeichen. "sicherheit" liegt zwischen 0 und 1."""
 
 
-def anweisung(rahmenhinweis):
-    return AUFGABE.format(rahmenhinweis=rahmenhinweis)
+# Stellen der Anweisungstexte, die sich mit der Aufgabe ändern (auch in vision_kombi.ANALYSE).
+FACH_STANDARD = "im Fach Deutsch, Jahrgang 9"
+KATEGORIEN = {
+    "R": "R (Rechtschreibung, auch Groß-/Kleinschreibung und Getrennt-/Zusammenschreibung)",
+    "Z": "Z (Zeichensetzung)",
+    "Gr": "Gr (Grammatik)",
+}
+_KATEGORIEN_STANDARD = re.compile(r"R \(Rechtschreibung.*?Gr \(Grammatik\)", re.DOTALL)
+
+
+def anpassen(text, aufgabe):
+    """Setzt Fach, Jahrgang und die eingeschalteten Kategorien in einen Anweisungstext ein.
+
+    `aufgabe` ist {"fach", "jahrgang", "kategorien"}; ohne `aufgabe` bleibt der Text
+    unverändert (Deutsch, Jahrgang 9, R, Z, Gr). Unbekannte Kürzel zählen nicht; bleibt
+    keines übrig, gelten alle drei.
+    """
+    if not aufgabe:
+        return text
+    gewaehlt = [k for k in KATEGORIEN if k in (aufgabe.get("kategorien") or [])]
+    gewaehlt = gewaehlt or list(KATEGORIEN)
+    text = text.replace(FACH_STANDARD,
+                        f"im Fach {aufgabe.get('fach') or 'Deutsch'}, "
+                        f"Jahrgang {aufgabe.get('jahrgang') or 9}")
+    text = _KATEGORIEN_STANDARD.sub(lambda _: ", ".join(KATEGORIEN[k] for k in gewaehlt), text)
+    return text.replace('"kategorie": "R"', f'"kategorie": "{gewaehlt[0]}"')
+
+
+def anweisung(rahmenhinweis, aufgabe=None):
+    return anpassen(AUFGABE.format(rahmenhinweis=rahmenhinweis), aufgabe)
 
 
 def json_lesen(text):

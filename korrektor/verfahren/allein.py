@@ -26,8 +26,12 @@ def aus_antwort(roh, bildgroesse, umrechnen):
     return roh.get("transkription"), funde, verworfen
 
 
-def ausfuehren(bildpfad, name, modell, rahmenhinweis, umrechnen, fragen, max_kante):
-    """`fragen(anweisung, jpeg_bytes, modell)` liefert (Antworttext, Nutzung)."""
+def ausfuehren(bildpfad, name, modell, rahmenhinweis, umrechnen, fragen, max_kante,
+               aufgabe=None):
+    """`fragen(anweisung, jpeg_bytes, modell)` liefert (Antworttext, Nutzung).
+
+    `aufgabe` ({"fach", "jahrgang", "kategorien"}) fließt in die Anweisung ein.
+    """
     bildpfad = Path(bildpfad)
     daten, groesse, _ = bild.laden(bildpfad, max_kante)
     modelle = {"lesen": modell, "analyse": modell}
@@ -35,7 +39,7 @@ def ausfuehren(bildpfad, name, modell, rahmenhinweis, umrechnen, fragen, max_kan
     meldung = None
     for _ in range(2):
         try:
-            text, nutzung = fragen(anweisung(rahmenhinweis), daten, modell)
+            text, nutzung = fragen(anweisung(rahmenhinweis, aufgabe), daten, modell)
             transkription, funde, verworfen = aus_antwort(json_lesen(text), groesse, umrechnen)
             return ergebnis(bildpfad.name, name, modelle, groesse, transkription, funde,
                             time.time() - start, nutzung, verworfen=verworfen)

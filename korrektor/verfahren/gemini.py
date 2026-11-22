@@ -28,4 +28,5 @@ def fragen(anweisung, jpeg, modell, json_antwort=True):
 
 def ausfuehren(bildpfad, einst):
     return allein.ausfuehren(bildpfad, NAME, einst["modelle"]["gemini"], RAHMEN_GEMINI,
-                             gemini_zu_pixel, fragen, einst["max_kante"])
+                             gemini_zu_pixel, fragen, einst["max_kante"],
+                             aufgabe=einst.get("aufgabe"))

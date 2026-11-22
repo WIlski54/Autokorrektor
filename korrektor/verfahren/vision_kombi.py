@@ -7,7 +7,7 @@ from pathlib import Path
 from google.cloud import vision
 
 from korrektor import bild
-from korrektor.anweisung import json_lesen
+from korrektor.anweisung import anpassen, json_lesen
 from korrektor.ergebnis import ergebnis, fund
 from korrektor.koordinaten import ecken_zu_rahmen, luecke, vereinigen
 
@@ -135,7 +135,8 @@ def ausfuehren(bildpfad, einst):
         try:
             annotation = vision_lesen(daten)
             woerter = woerter_aus_antwort(annotation, faktor)
-            text, nutzung = fragen(ANALYSE + nummerierter_text(woerter), None, modell)
+            text, nutzung = fragen(anpassen(ANALYSE, einst.get("aufgabe")) + nummerierter_text(woerter),
+                                   None, modell)
             funde = funde_bauen(json_lesen(text), woerter, groesse)
             zusatz = gegenpruefen(funde, woerter, bildpfad, fragen, modell,
                                   einst["vision"]["sicherheit_schwelle"])

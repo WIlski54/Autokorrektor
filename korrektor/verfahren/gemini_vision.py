@@ -45,8 +45,8 @@ def ausfuehren(bildpfad, einst):
         try:
             with ThreadPoolExecutor(max_workers=2) as gleichzeitig:
                 vision_lauf = gleichzeitig.submit(vision_lesen, daten)
-                gemini_lauf = gleichzeitig.submit(gemini.fragen, anweisung(RAHMEN_GEMINI),
-                                                  daten, modell)
+                gemini_lauf = gleichzeitig.submit(
+                    gemini.fragen, anweisung(RAHMEN_GEMINI, einst.get("aufgabe")), daten, modell)
             text, nutzung = gemini_lauf.result()
             transkription, funde, verworfen = aus_antwort(json_lesen(text), groesse,
                                                           gemini_zu_pixel)
