@@ -24,3 +24,6 @@ bericht_bilder/
 
 # Daten der Web-App bleiben lokal
 daten/
+
+# Probe-Ausgaben bleiben lokal
+ausgabe_probe/
