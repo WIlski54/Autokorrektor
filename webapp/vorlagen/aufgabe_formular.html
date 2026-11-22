@@ -1,0 +1,81 @@
+{% extends "grundriss.html" %}
+{% block titel %}{{ 'Aufgabe bearbeiten' if aufgabe else 'Neue Aufgabe' }}{% endblock %}
+{% block krumen %}
+  {% if aufgabe %}
+    <li><a href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">{{ aufgabe.titel }}</a></li>
+    <li aria-current="page">Bearbeiten</li>
+  {% else %}
+    <li aria-current="page">Neue Aufgabe</li>
+  {% endif %}
+{% endblock %}
+{% block inhalt %}
+<h1>{{ 'Aufgabe bearbeiten' if aufgabe else 'Neue Aufgabe' }}</h1>
+
+{% if fehler %}
+<div class="meldung fehler" role="alert">
+  <ul>
+    {% for text in fehler %}<li>{{ text }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if hat_arbeiten %}
+<p class="meldung">
+  Zu dieser Aufgabe gibt es schon Arbeiten. Änderungen an Kategorien und Verfahren gelten
+  nur für künftige Analysen; bereits analysierte Seiten sind davon nicht betroffen.
+</p>
+{% endif %}
+
+<form class="formular" method="post" novalidate>
+  <div class="feld">
+    <label for="titel">Titel</label>
+    <input id="titel" name="titel" type="text" value="{{ werte.titel }}" maxlength="200" required
+           placeholder="z. B. Versuchsbeschreibung">
+  </div>
+  <div class="feldreihe">
+    <div class="feld">
+      <label for="fach">Fach</label>
+      <input id="fach" name="fach" type="text" value="{{ werte.fach }}" maxlength="100" required>
+    </div>
+    <div class="feld schmal">
+      <label for="jahrgang">Jahrgang</label>
+      <input id="jahrgang" name="jahrgang" type="number" min="1" max="13" inputmode="numeric"
+             value="{{ werte.jahrgang if werte.jahrgang is not none else '' }}" required>
+    </div>
+  </div>
+
+  <fieldset class="feld">
+    <legend>Was soll die KI prüfen?</legend>
+    <div class="schalterreihe">
+      {% for kuerzel, name in kategorien %}
+      <label class="schalter kat-{{ kuerzel }}">
+        <input type="checkbox" name="kategorien" value="{{ kuerzel }}"{% if kuerzel in werte.kategorien %} checked{% endif %}>
+        <span><b>{{ kuerzel }}</b> {{ name }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <div class="feld">
+    <label for="verfahren">Verfahren</label>
+    <select id="verfahren" name="verfahren">
+      {% for wert, eintrag in verfahren.items() %}
+      <option value="{{ wert }}"{% if wert == werte.verfahren %} selected{% endif %}>{{ eintrag.name }}</option>
+      {% endfor %}
+    </select>
+    <p class="leise">Ob Schlüssel und Modell für das Verfahren vorhanden sind, prüft die App beim Start der Analyse.</p>
+  </div>
+
+  <div class="feld">
+    <label class="schalter">
+      <input type="checkbox" name="vorschlag_in_ausgabe" value="1"{% if werte.vorschlag_in_ausgabe %} checked{% endif %}>
+      <span>Richtige Schreibung in der Ausgabe zeigen</span>
+    </label>
+  </div>
+
+  <div class="knopfreihe">
+    <button class="knopf haupt" type="submit">{{ 'Speichern' if aufgabe else 'Anlegen und Fotos hochladen' }}</button>
+    <a class="knopf" href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) if aufgabe else url_for('seiten.aufgaben') }}">Abbrechen</a>
+  </div>
+</form>
+{% endblock %}

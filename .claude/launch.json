@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["pruefseite.py"],
       "port": 5000
+    },
+    {
+      "name": "webapp",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["start.py"],
+      "port": 5001
     }
   ]
 }

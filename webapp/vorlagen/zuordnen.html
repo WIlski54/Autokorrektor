@@ -1,0 +1,9 @@
+{% extends "grundriss.html" %}
+{% block titel %}Fotos hochladen – {{ aufgabe.titel }}{% endblock %}
+{% block krumen %}
+<li><a href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">{{ aufgabe.titel }}</a></li>
+<li aria-current="page">Fotos hochladen</li>
+{% endblock %}
+{% block inhalt %}
+<h1>Fotos hochladen und zuordnen</h1>
+{% endblock %}

@@ -1,0 +1,7 @@
+{% extends "grundriss.html" %}
+{% block titel %}Fehler {{ code }}{% endblock %}
+{% block inhalt %}
+<h1>Das hat nicht geklappt</h1>
+<p class="meldung fehler" role="alert">{{ text }}</p>
+<p><a class="knopf" href="{{ url_for('seiten.aufgaben') }}">Zur Aufgabenliste</a></p>
+{% endblock %}

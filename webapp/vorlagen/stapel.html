@@ -1,0 +1,15 @@
+{% extends "grundriss.html" %}
+{% block titel %}{{ aufgabe.titel }}{% endblock %}
+{% block krumen %}<li aria-current="page">{{ aufgabe.titel }}</li>{% endblock %}
+{% block inhalt %}
+<div class="titelzeile">
+  <div>
+    <h1>{{ aufgabe.titel }}</h1>
+    <p class="leise unterzeile">{{ aufgabe.fach }}, Jahrgang {{ aufgabe.jahrgang }} · prüft {{ aufgabe.kategorien|join(', ') }} · {{ anzeigename(aufgabe.verfahren) }}</p>
+  </div>
+  <div class="knopfreihe">
+    <a class="knopf" href="{{ url_for('seiten.aufgabe_bearbeiten', aufgabe_id=aufgabe.id) }}">Einstellungen</a>
+    <a class="knopf haupt" href="{{ url_for('seiten.hochladen', aufgabe_id=aufgabe.id) }}">Fotos hochladen</a>
+  </div>
+</div>
+{% endblock %}

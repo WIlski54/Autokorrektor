@@ -1,0 +1,61 @@
+{% extends "grundriss.html" %}
+{% block titel %}Aufgaben{% endblock %}
+{% block inhalt %}
+<div class="titelzeile">
+  <h1>Aufgaben</h1>
+  <a class="knopf haupt" href="{{ url_for('seiten.aufgabe_neu') }}">Neue Aufgabe</a>
+</div>
+
+<aside class="hinweis" aria-label="Hinweis zum Prototyp">
+  <strong>Prototyp.</strong>
+  Dieses Werkzeug ist für eigene Texte gedacht. Bevor echte Schülerarbeiten verarbeitet
+  werden, sind Verarbeitungsort, Auftragsverarbeitung und Genehmigung zu klären.
+  Die Fotos bleiben auf diesem Rechner; an den Analysedienst geht nur das Bild der Seite.
+</aside>
+
+{% if aufgaben %}
+<table class="tabelle">
+  <thead>
+    <tr>
+      <th scope="col">Titel</th>
+      <th scope="col">Fach</th>
+      <th scope="col">Jahrgang</th>
+      <th scope="col" class="zahl">Arbeiten</th>
+      <th scope="col">Fortschritt</th>
+      <th scope="col"><span class="nur-vorlesen">Aktionen</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in aufgaben %}
+    <tr>
+      <th scope="row"><a href="{{ url_for('seiten.stapel', aufgabe_id=a.id) }}">{{ a.titel }}</a></th>
+      <td>{{ a.fach }}</td>
+      <td>{{ a.jahrgang }}</td>
+      <td class="zahl">{{ a.arbeiten }}</td>
+      <td>
+        {% if a.seiten %}
+          <progress max="{{ a.seiten }}" value="{{ a.seiten_fertig }}"></progress>
+          <span class="leise">{{ a.seiten_fertig }} von {{ a.seiten }} Seiten analysiert{% if a.seiten_fehlgeschlagen %}, {{ a.seiten_fehlgeschlagen }} fehlgeschlagen{% endif %}{% if a.offen %} · {{ a.offen }} offene Vorschläge{% endif %}</span>
+        {% else %}
+          <span class="leise">noch keine Arbeiten</span>
+        {% endif %}
+      </td>
+      <td class="aktionen">
+        <a class="knopf klein" href="{{ url_for('seiten.stapel', aufgabe_id=a.id) }}">Öffnen</a>
+        <a class="knopf klein" href="{{ url_for('seiten.aufgabe_bearbeiten', aufgabe_id=a.id) }}">Bearbeiten</a>
+        <form method="post" action="{{ url_for('seiten.aufgabe_loeschen', aufgabe_id=a.id) }}"
+              data-nachfrage="Die Aufgabe „{{ a.titel }}“ mit allen Fotos und Vorschlägen endgültig löschen?">
+          <button class="knopf klein gefahr" type="submit">Löschen</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="leer">
+  <p>Noch keine Aufgabe angelegt.</p>
+  <p class="leise">Eine Aufgabe fasst die Arbeiten einer Lerngruppe zu einem Schreibauftrag zusammen.</p>
+</div>
+{% endif %}
+{% endblock %}
