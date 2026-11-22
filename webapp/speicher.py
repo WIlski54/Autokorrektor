@@ -84,6 +84,8 @@ CREATE INDEX IF NOT EXISTS zeichen_seite ON zeichen(seite_id);
 """
 
 AUFGABE_FELDER = ("titel", "fach", "jahrgang", "kategorien", "verfahren", "vorschlag_in_ausgabe")
+ANALYSE_STATUS = ("neu", "wartet", "laeuft", "fertig", "fehlgeschlagen")
+SEITE_FELDER = ("fehlermeldung", "transkription", "dauer_s", "verworfen")
 
 
 def _jetzt():
@@ -109,6 +111,17 @@ def _zeichen_aus_zeile(zeile):
     zeichen = dict(zeile)
     zeichen["rahmen_ki"] = json.loads(zeichen["rahmen_ki"]) if zeichen["rahmen_ki"] else None
     return zeichen
+
+
+def _ueberdeckt(neu, alt):
+    """Ob der Rahmen `alt` mehr als die Hälfte der Fläche des Rahmens `neu` überdeckt."""
+    x, y, b, h = neu
+    ax, ay, ab, ah = alt
+    breite = min(x + b, ax + ab) - max(x, ax)
+    hoehe = min(y + h, ay + ah) - max(y, ay)
+    if breite <= 0 or hoehe <= 0 or b <= 0 or h <= 0:
+        return False
+    return breite * hoehe > 0.5 * b * h
 
 
 def status_gesamt(seitenstatus):
@@ -365,3 +378,76 @@ class Speicher:
         with self._verbindung() as db:
             zeile = db.execute("SELECT * FROM seite WHERE id = ?", (id,)).fetchone()
         return dict(zeile) if zeile else None
+
+    # --- Analysestatus, Lauf und Zeichen ---------------------------------------------------
+
+    def seite_status(self, id, status, lauf=None, **felder):
+        """Setzt den Analysestatus und die genannten Felder.
+
+        Mit `lauf` wird nur geschrieben, wenn dieser Lauf noch der aktuelle der Seite ist.
+        Gibt zurück, ob geschrieben wurde.
+        """
+        if status not in ANALYSE_STATUS:
+            raise ValueError(f"unbekannter Status: {status}")
+        unbekannt = set(felder) - set(SEITE_FELDER)
+        if unbekannt:
+            raise ValueError(f"unbekannte Felder: {', '.join(sorted(unbekannt))}")
+        werte = {"analyse_status": status, **felder}
+        if status == "fertig":
+            werte["analysiert_am"] = _jetzt()
+        zuweisung = ", ".join(f"{feld} = ?" for feld in werte)
+        bedingung, zusatz = "id = ?", (id,)
+        if lauf is not None:
+            bedingung, zusatz = "id = ? AND lauf = ?", (id, lauf)
+        with self._verbindung() as db:
+            return db.execute(f"UPDATE seite SET {zuweisung} WHERE {bedingung}",
+                              (*werte.values(), *zusatz)).rowcount > 0
+
+    def seite_lauf_beginnen(self, id):
+        """Beginnt einen neuen Analyselauf: erhöht `lauf`, setzt Status `laeuft`.
+
+        Gibt die Nummer des Laufs zurück, None, wenn es die Seite nicht (mehr) gibt.
+        """
+        with self._verbindung() as db:
+            db.execute("UPDATE seite SET lauf = lauf + 1, analyse_status = 'laeuft',"
+                       " fehlermeldung = NULL WHERE id = ?", (id,))
+            zeile = db.execute("SELECT lauf FROM seite WHERE id = ?", (id,)).fetchone()
+        return zeile["lauf"] if zeile else None
+
+    def zeichen_ersetzen(self, seite_id, lauf, zeichen):
+        """Ersetzt die offenen KI-Zeichen der Seite durch neue Vorschläge.
+
+        Schreibt nur, wenn `lauf` noch der aktuelle Lauf der Seite ist (sonst False).
+        Bestätigte, verworfene und von Hand gesetzte Zeichen bleiben erhalten; ein neuer
+        Vorschlag entfällt, wenn ein erhaltener Rahmen mehr als die Hälfte seiner Fläche
+        überdeckt.
+        """
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            zeile = db.execute("SELECT lauf FROM seite WHERE id = ?", (seite_id,)).fetchone()
+            if zeile is None or zeile["lauf"] != lauf:
+                return False
+            db.execute("DELETE FROM zeichen WHERE seite_id = ? AND herkunft = 'ki'"
+                       " AND status = 'offen'", (seite_id,))
+            erhalten = [tuple(z) for z in db.execute(
+                "SELECT x, y, breite, hoehe FROM zeichen WHERE seite_id = ?", (seite_id,))]
+            for z in zeichen:
+                rahmen = (z["x"], z["y"], z["breite"], z["hoehe"])
+                if any(_ueberdeckt(rahmen, alt) for alt in erhalten):
+                    continue
+                rahmen_ki = z.get("rahmen_ki")
+                db.execute(
+                    "INSERT INTO zeichen (seite_id, kategorie, typ, x, y, breite, hoehe, gelesen,"
+                    " vorschlag, herkunft, status, bestaetigt_wie, rahmen_ki)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (seite_id, z["kategorie"], z.get("typ", "wort"), *rahmen,
+                     z.get("gelesen") or "", z.get("vorschlag") or "",
+                     z.get("herkunft", "ki"), z.get("status", "offen"), z.get("bestaetigt_wie"),
+                     json.dumps(list(rahmen_ki)) if rahmen_ki is not None else None))
+            return True
+
+    def seiten_unfertig(self):
+        """Seiten, deren Analyse noch aussteht oder unterbrochen wurde (wartet, laeuft)."""
+        with self._verbindung() as db:
+            return [z[0] for z in db.execute(
+                "SELECT id FROM seite WHERE analyse_status IN ('wartet', 'laeuft') ORDER BY id")]

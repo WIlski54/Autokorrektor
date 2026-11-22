@@ -289,3 +289,212 @@ def test_aufgaben_zaehlt_arbeiten_und_seiten(speicher):
     (aufgabe,) = speicher.aufgaben()
     assert aufgabe["arbeiten"] == 3 and aufgabe["seiten"] == 5
     assert aufgabe["seiten_fertig"] == 0 and aufgabe["offen"] == 0
+
+
+# --- Status, Lauf und Zeichen ------------------------------------------------------------
+
+def _zeichen(x=100, y=100, breite=80, hoehe=30, **felder):
+    return {"kategorie": "R", "typ": "wort", "x": x, "y": y, "breite": breite, "hoehe": hoehe,
+            "gelesen": "Fahrad", "vorschlag": "Fahrrad", "herkunft": "ki", "status": "offen",
+            "rahmen_ki": [x, y, breite, hoehe], **felder}
+
+
+def _seiten(speicher, zahl=1):
+    nr = _aufgabe(speicher)
+    return nr, speicher.arbeit_anlegen(nr, [(f"{i}.jpg", _bild()) for i in range(zahl)])
+
+
+def _zeichen_der_seite(speicher, seite_id):
+    arbeit = speicher.arbeit(speicher.seite(seite_id)["arbeit_id"])
+    return next(s["zeichen"] for s in arbeit["seiten"] if s["id"] == seite_id)
+
+
+def test_seite_lauf_beginnen_erhoeht_lauf_und_setzt_laeuft(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    speicher.seite_status(seite_id, "fehlgeschlagen", fehlermeldung="Netz weg")
+    assert speicher.seite_lauf_beginnen(seite_id) == 1
+    seite = speicher.seite(seite_id)
+    assert seite["lauf"] == 1 and seite["analyse_status"] == "laeuft"
+    assert seite["fehlermeldung"] is None
+    assert speicher.seite_lauf_beginnen(seite_id) == 2
+    assert speicher.seite_lauf_beginnen(999) is None
+
+
+def test_seite_status_setzt_status_und_felder(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    assert speicher.seite_status(seite_id, "fertig", transkription="Das Fahrad", dauer_s=12.5,
+                                 verworfen=2) is True
+    seite = speicher.seite(seite_id)
+    assert seite["analyse_status"] == "fertig" and seite["transkription"] == "Das Fahrad"
+    assert seite["dauer_s"] == 12.5 and seite["verworfen"] == 2
+    assert seite["analysiert_am"]
+    speicher.seite_status(seite_id, "fehlgeschlagen", fehlermeldung="Zeitüberschreitung")
+    seite = speicher.seite(seite_id)
+    assert seite["analyse_status"] == "fehlgeschlagen"
+    assert seite["fehlermeldung"] == "Zeitüberschreitung"
+    assert seite["transkription"] == "Das Fahrad"  # nicht genannte Felder bleiben
+
+
+def test_seite_status_lehnt_unbekanntes_ab(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    with pytest.raises(ValueError):
+        speicher.seite_status(seite_id, "kaputt")
+    with pytest.raises(ValueError):
+        speicher.seite_status(seite_id, "fertig", bilddatei="x.jpg")
+
+
+def test_seite_status_mit_veraltetem_lauf_schreibt_nichts(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    alt = speicher.seite_lauf_beginnen(seite_id)
+    neu = speicher.seite_lauf_beginnen(seite_id)
+    assert speicher.seite_status(seite_id, "fehlgeschlagen", fehlermeldung="spät", lauf=alt) is False
+    assert speicher.seite(seite_id)["analyse_status"] == "laeuft"
+    assert speicher.seite_status(seite_id, "fertig", lauf=neu) is True
+    assert speicher.seite(seite_id)["analyse_status"] == "fertig"
+
+
+def test_zeichen_ersetzen_mit_aktuellem_lauf_schreibt(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    luecke = _zeichen(300, 100, 10, 30, kategorie="Z", typ="luecke", gelesen="a b",
+                      vorschlag="a, b")
+    assert speicher.zeichen_ersetzen(seite_id, lauf, [_zeichen(), luecke]) is True
+    erstes, zweites = _zeichen_der_seite(speicher, seite_id)
+    assert erstes["seite_id"] == seite_id and erstes["id"] != zweites["id"]
+    assert (erstes["kategorie"], erstes["typ"]) == ("R", "wort")
+    assert (erstes["x"], erstes["y"], erstes["breite"], erstes["hoehe"]) == (100, 100, 80, 30)
+    assert (erstes["gelesen"], erstes["vorschlag"]) == ("Fahrad", "Fahrrad")
+    assert (erstes["herkunft"], erstes["status"]) == ("ki", "offen")
+    assert erstes["bestaetigt_wie"] is None
+    assert erstes["rahmen_ki"] == [100, 100, 80, 30]
+    assert (zweites["kategorie"], zweites["typ"]) == ("Z", "luecke")
+
+
+def test_zeichen_ersetzen_mit_veraltetem_lauf_schreibt_nichts(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    alt = speicher.seite_lauf_beginnen(seite_id)
+    neu = speicher.seite_lauf_beginnen(seite_id)
+    assert speicher.zeichen_ersetzen(seite_id, neu, [_zeichen()]) is True
+    assert speicher.zeichen_ersetzen(seite_id, alt, [_zeichen(500, 500), _zeichen(700, 700)]) is False
+    (bleibt,) = _zeichen_der_seite(speicher, seite_id)
+    assert bleibt["x"] == 100
+    assert speicher.zeichen_ersetzen(999, 1, [_zeichen()]) is False
+
+
+def test_zeichen_ersetzen_erhaelt_bestaetigte_verworfene_und_eigene(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [
+        _zeichen(100, 100, gelesen="offen"),
+        _zeichen(100, 200, gelesen="bestaetigt", status="bestaetigt", bestaetigt_wie="einzeln"),
+        _zeichen(100, 300, gelesen="verworfen", status="verworfen"),
+        _zeichen(100, 400, gelesen="hand", herkunft="hand", status="bestaetigt", kategorie="A",
+                 rahmen_ki=None),
+        _zeichen(100, 500, gelesen="hand offen", herkunft="hand"),
+    ])
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    assert speicher.zeichen_ersetzen(seite_id, lauf, [_zeichen(600, 600, gelesen="neu")]) is True
+    zeichen = {z["gelesen"]: z for z in _zeichen_der_seite(speicher, seite_id)}
+    assert set(zeichen) == {"bestaetigt", "verworfen", "hand", "hand offen", "neu"}
+    assert zeichen["bestaetigt"]["bestaetigt_wie"] == "einzeln"
+    assert zeichen["hand"]["kategorie"] == "A" and zeichen["hand"]["rahmen_ki"] is None
+    assert zeichen["neu"]["status"] == "offen"
+
+
+def test_vorschlag_ueber_erhaltenem_rahmen_wird_nicht_angelegt(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [
+        _zeichen(100, 100, 100, 40, gelesen="bestaetigt", status="bestaetigt"),
+        _zeichen(100, 300, 100, 40, gelesen="verworfen", status="verworfen"),
+        _zeichen(100, 500, 100, 40, gelesen="offen"),
+    ])
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [
+        _zeichen(110, 105, 100, 40, gelesen="fast deckungsgleich"),     # über „bestaetigt“
+        _zeichen(120, 310, 40, 20, gelesen="liegt ganz im verworfenen"),
+        _zeichen(150, 100, 100, 40, gelesen="genau die Hälfte"),        # nicht mehr als die Hälfte
+        _zeichen(160, 300, 100, 40, gelesen="weniger als die Hälfte"),
+        _zeichen(100, 500, 100, 40, gelesen="über dem alten offenen"),  # das alte ist ersetzt
+        _zeichen(0, 0, 1000, 1000, gelesen="riesig"),  # überdeckt alles, aber kaum eigene Fläche
+    ])
+    assert {z["gelesen"] for z in _zeichen_der_seite(speicher, seite_id)} == {
+        "bestaetigt", "verworfen", "genau die Hälfte", "weniger als die Hälfte",
+        "über dem alten offenen", "riesig"}
+
+
+def test_neue_vorschlaege_duerfen_einander_ueberdecken(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [_zeichen(gelesen="a"), _zeichen(gelesen="b")])
+    assert len(_zeichen_der_seite(speicher, seite_id)) == 2
+
+
+def test_arbeiten_liefert_offen_und_status_gesamt(speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id = {}
+    seiten = {}
+    for name in ("neu", "laeuft", "wartet", "fertig", "fehlgeschlagen"):
+        seiten[name] = speicher.arbeit_anlegen(nr, [("a.jpg", _bild()), ("b.jpg", _bild())])
+        arbeit_id[name] = speicher.seite(seiten[name][0])["arbeit_id"]
+    speicher.seite_status(seiten["laeuft"][0], "fertig")
+    speicher.seite_lauf_beginnen(seiten["laeuft"][1])
+    speicher.seite_status(seiten["wartet"][0], "wartet")
+    speicher.seite_status(seiten["wartet"][1], "fertig")
+    for seite_id in seiten["fertig"]:
+        lauf = speicher.seite_lauf_beginnen(seite_id)
+        speicher.zeichen_ersetzen(seite_id, lauf, [
+            _zeichen(100, 100), _zeichen(100, 300),
+            _zeichen(100, 500, status="bestaetigt"), _zeichen(100, 700, status="verworfen")])
+        speicher.seite_status(seite_id, "fertig")
+    speicher.seite_status(seiten["fehlgeschlagen"][0], "fehlgeschlagen", fehlermeldung="x")
+    speicher.seite_status(seiten["fehlgeschlagen"][1], "laeuft")
+
+    arbeiten = {a["id"]: a for a in speicher.arbeiten(nr)}
+    for name in arbeit_id:
+        erwartet = "laeuft" if name == "wartet" else name
+        assert arbeiten[arbeit_id[name]]["status_gesamt"] == erwartet, name
+    assert arbeiten[arbeit_id["fertig"]]["offen"] == 4
+    assert [s["offen"] for s in arbeiten[arbeit_id["fertig"]]["seiten"]] == [2, 2]
+    assert arbeiten[arbeit_id["neu"]]["offen"] == 0
+
+    (aufgabe,) = speicher.aufgaben()
+    assert aufgabe["arbeiten"] == 5 and aufgabe["seiten"] == 10
+    assert aufgabe["seiten_fertig"] == 4 and aufgabe["seiten_fehlgeschlagen"] == 1
+    assert aufgabe["offen"] == 4 and aufgabe["bestaetigt"] == 0
+
+
+def test_seiten_unfertig_liefert_wartende_und_laufende(speicher):
+    _, seiten = _seiten(speicher, 5)
+    speicher.seite_status(seiten[1], "wartet")
+    speicher.seite_lauf_beginnen(seiten[2])
+    speicher.seite_status(seiten[3], "fertig")
+    speicher.seite_status(seiten[4], "fehlgeschlagen", fehlermeldung="x")
+    assert speicher.seiten_unfertig() == [seiten[1], seiten[2]]
+
+
+def test_aufgabe_loeschen_entfernt_auch_zeichen(speicher, tmp_path):
+    nr, (seite_id,) = _seiten(speicher)
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [_zeichen()])
+    speicher.aufgabe_loeschen(nr)
+    db = sqlite3.connect(tmp_path / "daten" / "korrektor.db")
+    try:
+        assert db.execute("SELECT COUNT(*) FROM zeichen").fetchone()[0] == 0
+    finally:
+        db.close()
+
+
+def test_gleichzeitiges_schreiben_aus_mehreren_threads(speicher):
+    from concurrent.futures import ThreadPoolExecutor
+    _, seiten = _seiten(speicher, 8)
+
+    def schreiben(seite_id):
+        lauf = speicher.seite_lauf_beginnen(seite_id)
+        speicher.zeichen_ersetzen(seite_id, lauf, [_zeichen(), _zeichen(300, 300)])
+        speicher.seite_status(seite_id, "fertig", lauf=lauf)
+
+    with ThreadPoolExecutor(max_workers=8) as gleichzeitig:
+        list(gleichzeitig.map(schreiben, seiten))
+    assert speicher.seiten_unfertig() == []
+    assert all(len(_zeichen_der_seite(speicher, s)) == 2 for s in seiten)
