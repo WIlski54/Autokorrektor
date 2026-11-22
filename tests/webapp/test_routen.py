@@ -665,8 +665,13 @@ def test_arbeit_zeigt_verworfene_zeichen_nicht(client, speicher):
     nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
     _mit_zeichen(speicher, s1, _zeichen(), _zeichen("wier", "wir", x=300, status="verworfen"))
     text = _text(client.get(f"/arbeit/{speicher.arbeiten(nr)[0]['id']}"))
-    assert [z["gelesen"] for z in _daten(text, "arbeit-daten")["zeichen"]] == ["Fahrad"]
-    assert "wier" not in text
+    daten = _daten(text, "arbeit-daten")
+    assert [z["gelesen"] for z in daten["zeichen"]] == ["Fahrad"]
+    # Seit Etappe 2 stehen verworfene Zeichen in den Daten, aber in einem eigenen Feld;
+    # die sichtbare Seite nennt sie nicht.
+    assert [z["gelesen"] for z in daten["verworfen"]] == ["wier"]
+    sichtbar = text[:text.index('<script type="application/json" id="arbeit-daten">')]
+    assert "wier" not in sichtbar and "Fahrad" in sichtbar
 
 
 def test_arbeit_ohne_analyse_nennt_den_stand(client, speicher):

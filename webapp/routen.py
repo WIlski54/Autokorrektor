@@ -1,4 +1,5 @@
-"""Alle Seiten und JSON-Schnittstellen der Etappe 1."""
+"""Alle Seiten und JSON-Schnittstellen der Etappen 1 und 2."""
+import math
 import re
 from urllib.parse import urlsplit
 
@@ -6,12 +7,16 @@ from flask import (Blueprint, Response, abort, current_app, flash, redirect, ren
                    request, url_for)
 from werkzeug.exceptions import HTTPException
 
+from webapp import regeln
 from webapp.verfahren import VERFAHREN, VOREINSTELLUNG, anzeigename, hindernis
 
 seiten = Blueprint("seiten", __name__)
 
 KATEGORIEN = (("R", "Rechtschreibung"), ("Z", "Zeichensetzung"), ("Gr", "Grammatik"))
 EIGENE_HOSTS = ("127.0.0.1", "localhost")
+VORSCHLAG_LAENGE = 200  # Zeichen; mehr passt in keine Randspalte
+ZEICHEN_FELDER = ("id", "seite_id", "kategorie", "typ", "x", "y", "breite", "hoehe", "gelesen",
+                  "vorschlag", "herkunft", "status", "bestaetigt_wie")
 
 
 def _speicher():
@@ -240,8 +245,10 @@ def arbeit(arbeit_id):
     if not 1 <= nummer <= len(arbeit["seiten"]):
         abort(404)
     seite = arbeit["seiten"][nummer - 1]
-    # Verworfene Zeichen bleiben gespeichert, werden hier aber nicht gezeigt.
+    # Verworfene Zeichen stehen in den Daten in einem eigenen Feld; die Liste der Vorlage
+    # zeigt sie nicht.
     zeichen = [z for z in seite["zeichen"] if z["status"] != "verworfen"]
+    verworfen = [z for z in seite["zeichen"] if z["status"] == "verworfen"]
     aufgabe = _speicher().aufgabe(arbeit["aufgabe_id"])
     reihe = [a["id"] for a in _speicher().arbeiten(arbeit["aufgabe_id"])]
     if aufgabe is None or arbeit_id not in reihe:  # inzwischen gelöscht
@@ -250,9 +257,14 @@ def arbeit(arbeit_id):
     daten = {
         "seite": {"id": seite["id"], "nummer": nummer, "breite": seite["breite"],
                   "hoehe": seite["hoehe"]},
-        "zeichen": [{feld: z[feld] for feld in (
-            "id", "kategorie", "typ", "x", "y", "breite", "hoehe", "gelesen", "vorschlag",
-            "herkunft", "status")} for z in zeichen],
+        "zeichen": [_zeichen_daten(z) for z in zeichen],
+        "verworfen": [_zeichen_daten(z) for z in verworfen],
+        "arbeit": {"id": arbeit["id"], "kuerzel": arbeit["kuerzel"],
+                   "bestaetigung": arbeit["bestaetigung"], **_arbeit_stand(arbeit)},
+        "seiten": [{"id": s["id"], "nummer": platz_s, "status": s["analyse_status"],
+                    "offen": len(regeln.offene(s["zeichen"]))}
+                   for platz_s, s in enumerate(arbeit["seiten"], start=1)],
+        "kuerzel": _kuerzelliste(),
     }
     return render_template(
         "arbeit.html", aufgabe=aufgabe, arbeit=arbeit, seite=seite, nummer=nummer,
@@ -260,6 +272,322 @@ def arbeit(arbeit_id):
         statustext=STATUSTEXT, kategorien=dict(KATEGORIEN),
         vorige_arbeit=reihe[platz - 1] if platz > 0 else None,
         naechste_arbeit=reihe[platz + 1] if platz + 1 < len(reihe) else None)
+
+
+# --- Korrektur: Zeichen bearbeiten (JSON) -------------------------------------------------
+#
+# Jede schreibende Antwort hat die Form
+#   {"zeichen": <aktuelles Zeichen oder null>,
+#    "arbeit": {"offen", "bestaetigt_am", "bestaetigbar", "grund"}}
+# Ein Regelverstoß ergibt 409, Unbekanntes 404, eine ungültige Eingabe 400, jeweils mit
+# {"fehler": Meldung}.
+
+class Eingabefehler(Exception):
+    """Der JSON-Körper einer Anfrage ist unbrauchbar (ergibt 400)."""
+
+
+@seiten.app_errorhandler(Eingabefehler)
+def _eingabefehler(fehler):
+    return {"fehler": str(fehler)}, 400
+
+
+@seiten.app_errorhandler(regeln.RegelFehler)
+def _regelfehler(fehler):
+    return {"fehler": str(fehler)}, 409
+
+
+def _gibt_es_nicht(was):
+    return {"fehler": f"{was} gibt es nicht (mehr). Bitte die Seite neu laden."}, 404
+
+
+def _zeichen_daten(zeichen):
+    return {feld: zeichen[feld] for feld in ZEICHEN_FELDER}
+
+
+def _arbeit_stand(arbeit):
+    """Der Stand einer Arbeit (wie von `speicher.arbeit`) für Antworten und Ansicht."""
+    return {"offen": sum(len(regeln.offene(s["zeichen"])) for s in arbeit["seiten"]),
+            "bestaetigt_am": arbeit["bestaetigt_am"],
+            "bestaetigbar": arbeit["bestaetigbar"],
+            "grund": arbeit["bestaetigbar_grund"]}
+
+
+def _kuerzelliste():
+    """R, Z, Gr und die eigenen Kürzel, je mit Bezeichnung, in der Reihenfolge der Auswahl."""
+    return ([{"kuerzel": k, "bezeichnung": b, "eigen": False} for k, b in KATEGORIEN]
+            + [{**eintrag, "eigen": True} for eintrag in _speicher().kuerzel()])
+
+
+def _erlaubte():
+    return regeln.erlaubte_kuerzel(_speicher().kuerzel())
+
+
+def _antwort(arbeit_id, zeichen_id=None, **zusatz):
+    """Die gemeinsame Antwort nach einer Änderung; 404, wenn die Arbeit inzwischen fehlt."""
+    arbeit = _speicher().arbeit(arbeit_id)
+    if arbeit is None:
+        return _gibt_es_nicht("Diese Arbeit")
+    zeichen = _speicher().zeichen_eintrag(zeichen_id) if zeichen_id is not None else None
+    return {"zeichen": _zeichen_daten(zeichen) if zeichen else None,
+            "arbeit": _arbeit_stand(arbeit), **zusatz}
+
+
+def _koerper(pflicht=(), wahl=(), leer_erlaubt=False):
+    """Der JSON-Körper als dict mit genau den vorgesehenen Feldern; sonst Eingabefehler."""
+    if leer_erlaubt and not request.get_data():
+        return {}
+    inhalt = request.get_json(silent=True)
+    if not isinstance(inhalt, dict):
+        raise Eingabefehler("Die Angaben fehlen oder sind unlesbar.")
+    fehlend = [feld for feld in pflicht if feld not in inhalt]
+    if fehlend:
+        raise Eingabefehler(f"Es fehlt die Angabe: {', '.join(fehlend)}.")
+    fremd = sorted(set(inhalt) - set(pflicht) - set(wahl))
+    if fremd:
+        raise Eingabefehler(f"Unbekannte Angabe: {', '.join(fremd)}.")
+    return inhalt
+
+
+def _pixel(inhalt, feld):
+    """Eine Zahl des Körpers, auf ganze Pixel gerundet (ab ,5 aufwärts)."""
+    wert = inhalt[feld]
+    if type(wert) is int:
+        return wert
+    if type(wert) is not float or not math.isfinite(wert):
+        raise Eingabefehler(f"Die Angabe {feld} muss eine Zahl sein.")
+    return math.floor(wert + 0.5)
+
+
+def _rahmen(inhalt):
+    return [_pixel(inhalt, feld) for feld in ("x", "y", "breite", "hoehe")]
+
+
+def _text(inhalt, feld, hoechstens=None):
+    """Ein Text des Körpers ohne Rand-Leerzeichen."""
+    wert = inhalt[feld]
+    if not isinstance(wert, str):
+        raise Eingabefehler(f"Die Angabe {feld} muss ein Text sein.")
+    wert = wert.strip()
+    if hoechstens is not None and len(wert) > hoechstens:
+        raise Eingabefehler(f"Die Angabe {feld} ist zu lang (höchstens {hoechstens} Zeichen).")
+    return wert
+
+
+def _kuerzel_aus(inhalt):
+    kuerzel = _text(inhalt, "kategorie")
+    if not kuerzel:
+        raise Eingabefehler("Bitte ein Kürzel wählen.")
+    return kuerzel
+
+
+def _uebergang(zeichen_id, regel):
+    """Wendet einen Übergang ohne weitere Angaben an (bestätigen, verwerfen, zurückholen)."""
+    zeichen = _speicher().zeichen_eintrag(zeichen_id)
+    if zeichen is None:
+        return _gibt_es_nicht("Dieses Zeichen")
+    return _schreiben(zeichen, regel(zeichen))
+
+
+def _schreiben(zeichen, felder):
+    if not _speicher().zeichen_aendern(zeichen["id"], **felder):  # inzwischen gelöscht
+        return _gibt_es_nicht("Dieses Zeichen")
+    return _antwort(zeichen["arbeit_id"], zeichen["id"])
+
+
+@seiten.post("/zeichen/<int:zeichen_id>/bestaetigen")
+def zeichen_bestaetigen(zeichen_id):
+    return _uebergang(zeichen_id, regeln.einzeln_bestaetigen)
+
+
+@seiten.post("/zeichen/<int:zeichen_id>/verwerfen")
+def zeichen_verwerfen(zeichen_id):
+    return _uebergang(zeichen_id, regeln.verwerfen)
+
+
+@seiten.post("/zeichen/<int:zeichen_id>/zurueckholen")
+def zeichen_zurueckholen(zeichen_id):
+    return _uebergang(zeichen_id, regeln.zurueckholen)
+
+
+@seiten.post("/zeichen/<int:zeichen_id>/aendern")
+def zeichen_aendern(zeichen_id):
+    """Ändert Kürzel und/oder Vorschlag: {"kategorie"?, "vorschlag"?}, mindestens eines."""
+    zeichen = _speicher().zeichen_eintrag(zeichen_id)
+    if zeichen is None:
+        return _gibt_es_nicht("Dieses Zeichen")
+    inhalt = _koerper(wahl=("kategorie", "vorschlag"))
+    if not inhalt:
+        raise Eingabefehler("Es fehlt die Angabe: kategorie oder vorschlag.")
+    kategorie = _kuerzel_aus(inhalt) if "kategorie" in inhalt else None
+    vorschlag = _text(inhalt, "vorschlag", VORSCHLAG_LAENGE) if "vorschlag" in inhalt else None
+    return _schreiben(zeichen, regeln.aendern(zeichen, kategorie=kategorie, vorschlag=vorschlag,
+                                              erlaubte=_erlaubte()))
+
+
+@seiten.post("/zeichen/<int:zeichen_id>/rahmen")
+def zeichen_rahmen(zeichen_id):
+    """Verschiebt den Rahmen oder ändert seine Größe: {"x", "y", "breite", "hoehe"}."""
+    zeichen = _speicher().zeichen_eintrag(zeichen_id)
+    seite = _speicher().seite(zeichen["seite_id"]) if zeichen else None
+    if seite is None:
+        return _gibt_es_nicht("Dieses Zeichen")
+    rahmen = _rahmen(_koerper(pflicht=("x", "y", "breite", "hoehe")))
+    return _schreiben(zeichen, regeln.verschieben(zeichen, *rahmen,
+                                                  (seite["breite"], seite["hoehe"])))
+
+
+@seiten.post("/zeichen/<int:zeichen_id>/loeschen")
+def zeichen_loeschen(zeichen_id):
+    """Löscht ein eigenes Zeichen; KI-Vorschläge werden verworfen, nicht gelöscht."""
+    zeichen = _speicher().zeichen_eintrag(zeichen_id)
+    if zeichen is None:
+        return _gibt_es_nicht("Dieses Zeichen")
+    regeln.loeschbar(zeichen)
+    _speicher().zeichen_loeschen(zeichen_id)
+    return _antwort(zeichen["arbeit_id"])
+
+
+@seiten.post("/seite/<int:seite_id>/zeichen")
+def zeichen_setzen(seite_id):
+    """Setzt ein eigenes Zeichen: {"kategorie", "typ", "x", "y", "breite", "hoehe", "vorschlag"?}."""
+    seite = _speicher().seite(seite_id)
+    if seite is None:
+        return _gibt_es_nicht("Diese Seite")
+    inhalt = _koerper(pflicht=("kategorie", "typ", "x", "y", "breite", "hoehe"),
+                      wahl=("vorschlag",))
+    vorschlag = _text(inhalt, "vorschlag", VORSCHLAG_LAENGE) if "vorschlag" in inhalt else ""
+    neu = regeln.neues_handzeichen(_kuerzel_aus(inhalt), _text(inhalt, "typ"), *_rahmen(inhalt),
+                                   vorschlag, _erlaubte(), (seite["breite"], seite["hoehe"]))
+    try:
+        zeichen_id = _speicher().zeichen_anlegen(seite_id, neu)
+    except ValueError:  # Seite inzwischen gelöscht
+        return _gibt_es_nicht("Diese Seite")
+    return _antwort(seite["arbeit_id"], zeichen_id)
+
+
+# --- Korrektur: Arbeit insgesamt (JSON) ---------------------------------------------------
+
+@seiten.post("/arbeit/<int:arbeit_id>/rest-bestaetigen")
+def arbeit_rest_bestaetigen(arbeit_id):
+    """Bestätigt alle offenen Zeichen der Arbeit gesammelt; nennt sie in `geaendert`."""
+    arbeit = _speicher().arbeit(arbeit_id)
+    if arbeit is None:
+        return _gibt_es_nicht("Diese Arbeit")
+    ids = regeln.offene([z for seite in arbeit["seiten"] for z in seite["zeichen"]])
+    # Eine Transaktion; was inzwischen nicht mehr offen ist, bleibt, wie es ist.
+    geaendert = _speicher().zeichen_viele_setzen(ids, nur_status="offen",
+                                                 **regeln.REST_BESTAETIGEN)
+    return _antwort(arbeit_id, geaendert=geaendert)
+
+
+@seiten.get("/arbeit/<int:arbeit_id>/zahlen")
+def arbeit_zahlen(arbeit_id):
+    """Die fünf Zahlen für den Bestätigungsdialog und ob die Arbeit bestätigbar ist."""
+    arbeit = _speicher().arbeit(arbeit_id)
+    if arbeit is None:
+        return _gibt_es_nicht("Diese Arbeit")
+    stand = _arbeit_stand(arbeit)
+    return {"zahlen": regeln.zahlen([z for seite in arbeit["seiten"] for z in seite["zeichen"]]),
+            "bestaetigbar": stand["bestaetigbar"], "grund": stand["grund"], "arbeit": stand}
+
+
+def _zahlen_aus(inhalt):
+    """Die Zahlen, die der Dialog gezeigt hat; None, wenn die Anfrage keine nennt."""
+    if "zahlen" not in inhalt:
+        return None
+    zahlen = inhalt["zahlen"]
+    felder = set(regeln.zahlen([]))
+    if (not isinstance(zahlen, dict) or set(zahlen) != felder
+            or any(type(wert) is not int for wert in zahlen.values())):
+        raise Eingabefehler("Die Angabe zahlen ist unbrauchbar.")
+    return zahlen
+
+
+@seiten.post("/arbeit/<int:arbeit_id>/bestaetigen")
+def arbeit_bestaetigen(arbeit_id):
+    """Gesamtbestätigung; 409, wenn die Arbeit nicht bestätigbar ist.
+
+    Der Körper darf fehlen. Mit {"zahlen": {...}} (den Zahlen aus dem Dialog) scheitert
+    die Bestätigung mit 409, wenn sich die Zeichen seither geändert haben.
+    """
+    if _speicher().arbeit(arbeit_id) is None:
+        return _gibt_es_nicht("Diese Arbeit")
+    genannt = _zahlen_aus(_koerper(wahl=("zahlen",), leer_erlaubt=True))
+    zahlen = _speicher().arbeit_bestaetigen(arbeit_id, genannt)  # prüft und schreibt in einem Zug
+    if zahlen is None:
+        return _gibt_es_nicht("Diese Arbeit")
+    return _antwort(arbeit_id, zahlen=zahlen)
+
+
+@seiten.post("/arbeit/<int:arbeit_id>/kuerzel")
+def arbeit_kuerzel(arbeit_id):
+    """Benennt die Arbeit um: {"kuerzel"} mit 1 bis 20 Zeichen. Die Bestätigung bleibt."""
+    if _speicher().arbeit(arbeit_id) is None:
+        return _gibt_es_nicht("Diese Arbeit")
+    inhalt = _koerper(pflicht=("kuerzel",))
+    try:
+        kuerzel = regeln.arbeitskuerzel_pruefen(inhalt["kuerzel"])
+    except regeln.RegelFehler as fehler:
+        raise Eingabefehler(str(fehler)) from fehler
+    _speicher().arbeit_kuerzel_setzen(arbeit_id, kuerzel)
+    return _antwort(arbeit_id, kuerzel=kuerzel)
+
+
+@seiten.post("/seite/<int:seite_id>/neu-analysieren")
+def seite_neu_analysieren(seite_id):
+    """Reiht eine fertige oder fehlgeschlagene Seite neu ein.
+
+    Bestätigte, verworfene und eigene Zeichen bleiben; die offenen Vorschläge werden
+    ersetzt. Die Gesamtbestätigung der Arbeit verfällt sofort.
+    """
+    seite = _speicher().seite(seite_id)
+    if seite is None:
+        return _gibt_es_nicht("Diese Seite")
+    if seite["analyse_status"] not in ("fertig", "fehlgeschlagen"):
+        return {"fehler": "Diese Seite wird gerade analysiert oder wurde noch nie analysiert. "
+                          "Neu analysieren lassen sich nur fertige oder fehlgeschlagene "
+                          "Seiten."}, 409
+    aufgabe = _speicher().aufgabe_zur_seite(seite_id)
+    if aufgabe is None:  # inzwischen gelöscht
+        return _gibt_es_nicht("Diese Seite")
+    grund = _hindernis(aufgabe)
+    if grund:
+        return {"fehler": grund}, 409
+    _speicher().arbeit_bestaetigung_aufheben(seite["arbeit_id"])
+    _schlange().einreihen(seite_id)
+    return _antwort(seite["arbeit_id"])
+
+
+# --- Einstellungen: eigene Kürzel ---------------------------------------------------------
+
+LEERE_KUERZELZEILEN = 3
+
+
+def _kuerzel_zeigen(zeilen, fehler=None, status=200):
+    zeilen = list(zeilen) + [{"kuerzel": "", "bezeichnung": ""}] * LEERE_KUERZELZEILEN
+    return render_template("kuerzel.html", zeilen=zeilen, fehler=fehler, feste=KATEGORIEN,
+                           kuerzel_laenge=regeln.KUERZEL_LAENGE,
+                           bezeichnung_laenge=regeln.BEZEICHNUNG_LAENGE), status
+
+
+@seiten.route("/einstellungen/kuerzel", methods=["GET", "POST"])
+def einstellungen_kuerzel():
+    """Die Liste der eigenen Kürzel: je Zeile die Felder `kuerzel` und `bezeichnung`."""
+    if request.method == "GET":
+        return _kuerzel_zeigen(_speicher().kuerzel())
+    kuerzel = request.form.getlist("kuerzel")
+    bezeichnungen = request.form.getlist("bezeichnung")
+    laenge = max(len(kuerzel), len(bezeichnungen))
+    zeilen = [{"kuerzel": k.strip(), "bezeichnung": b.strip()}
+              for k, b in zip(kuerzel + [""] * (laenge - len(kuerzel)),
+                              bezeichnungen + [""] * (laenge - len(bezeichnungen)))]
+    zeilen = [z for z in zeilen if z["kuerzel"] or z["bezeichnung"]]  # leere Zeilen entfallen
+    try:
+        _speicher().kuerzel_setzen(zeilen)
+    except regeln.RegelFehler as fehler:
+        return _kuerzel_zeigen(zeilen, fehler=str(fehler), status=400)
+    flash("Die eigenen Kürzel sind gespeichert.", "erfolg")
+    return redirect(url_for("seiten.einstellungen_kuerzel"))
 
 
 # --- Bilder -------------------------------------------------------------------------------
