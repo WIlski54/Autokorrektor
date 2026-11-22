@@ -53,4 +53,9 @@ def hindernis(verfahren, einst):
     if not str(modelle.get(eintrag["modell"]) or "").strip():
         return (f"Für das Verfahren „{eintrag['name']}“ ist in einstellungen.toml unter "
                 f"[modelle] kein Modell für „{eintrag['modell']}“ eingetragen.")
+    kante = (einst or {}).get("max_kante")
+    if type(kante) is not int or kante <= 0:
+        return ("In einstellungen.toml fehlt der Eintrag max_kante (längste Bildkante in "
+                "Pixeln, mit der Fotos an die Dienste gehen), etwa: max_kante = 2400. "
+                "Bitte dort eintragen und die App neu starten.")
     return None

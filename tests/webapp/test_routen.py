@@ -229,6 +229,16 @@ def test_verfahren_zuordnung(monkeypatch):
     assert verfahren.hindernis("unbekannt", EINST)
 
 
+@pytest.mark.parametrize("einst", [
+    {"modelle": EINST["modelle"]}, {**EINST, "max_kante": 0}, {**EINST, "max_kante": "2400"}])
+def test_hindernis_meldet_fehlendes_max_kante(monkeypatch, einst):
+    from webapp import verfahren
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    grund = verfahren.hindernis("gemini", einst)
+    assert "max_kante" in grund and "einstellungen.toml" in grund
+    assert verfahren.hindernis("gemini", {**einst, "max_kante": 2400}) is None
+
+
 # --- Task 8: Hochladen und Zuordnen -------------------------------------------------------
 
 def _hochladen(client, nr, *dateien):
