@@ -6,10 +6,15 @@ angefügte Randspalte mit den Kürzeln auf Höhe der Textzeile. Die Ausgabe zeig
 Zeichen von der KI stammt oder von Hand gesetzt ist, und sie bewertet nichts.
 
 Alle Maße hängen an der Breite des Fotos, damit die Seite bei jeder Auflösung gleich aussieht.
+Das PDF schreibt Pillow: je Seite ein Bild, keine weitere Abhängigkeit.
 """
+import io
+from collections import Counter
 from functools import lru_cache
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+from webapp.regeln import RegelFehler
 
 # Die Farben je Kategorie, passend zur Korrekturansicht (`--kat-R`, `--kat-Z`, `--kat-Gr` in
 # app.css). Eigene Kürzel tragen das Petrol der selbst gesetzten Zeichen.
@@ -19,6 +24,13 @@ WEISS = (255, 255, 255)
 DUNKEL = (31, 35, 40)        # Kopf, Zahlen
 GRAU = (78, 84, 92)          # Vorschlag, Bezeichnungen
 LINIE = (176, 176, 170)      # Trennlinie, Kasten
+
+FESTE_KATEGORIEN = (("R", "Rechtschreibung"), ("Z", "Zeichensetzung"), ("Gr", "Grammatik"))
+
+MAX_KANTE = 2400             # Pixel; längere Seiten werden für das PDF verkleinert
+JPEG_QUALITAET = 85
+# Eine Seite mit 2400 Pixeln langer Kante ist im PDF so lang wie ein A4-Blatt (297 mm).
+AUFLOESUNG = MAX_KANTE / (297 / 25.4)
 
 RAND_ANTEIL = 0.16           # Breite der Randspalte als Anteil der Fotobreite
 RAND_ANTEIL_VORSCHLAG = 0.28  # mit „richtige Schreibung zeigen“
@@ -335,3 +347,150 @@ def seite_zeichnen(bild, zeichen, vorschlag_zeigen=False, kopf="", uebersicht=No
     if uebersicht is not None:
         _uebersicht_zeichnen(stift, gesetzt, kasten, breite, kopf_h + spalte_h)
     return seite
+
+
+# --- PDF ------------------------------------------------------------------------------------
+
+def fehleruebersicht(seiten, eigene):
+    """Die Zahl der bestätigten Zeichen je Kategorie über alle Seiten einer Arbeit.
+
+    `seiten` sind Seiten mit ihren `zeichen`, `eigene` die eigenen Kürzel als
+    `[{kuerzel, bezeichnung}]`. Gibt `[{"kuerzel", "bezeichnung", "anzahl"}]` zurück: nur
+    Kategorien mit mindestens einem Zeichen, R, Z, Gr zuerst, dann die übrigen Kürzel
+    alphabetisch. Keine Bewertung.
+    """
+    zahl = Counter(z["kategorie"] for seite in seiten for z in seite["zeichen"]
+                   if z["status"] == "bestaetigt")
+    namen = dict(FESTE_KATEGORIEN)
+    fest = [kuerzel for kuerzel in namen if zahl[kuerzel]]
+    namen = {**{e["kuerzel"]: e["bezeichnung"] for e in eigene}, **namen}
+    uebrige = sorted((kuerzel for kuerzel in zahl if kuerzel not in fest),
+                     key=lambda kuerzel: (kuerzel.casefold(), kuerzel))
+    return [{"kuerzel": kuerzel, "bezeichnung": namen.get(kuerzel, ""), "anzahl": zahl[kuerzel]}
+            for kuerzel in fest + uebrige]
+
+
+def _fotobreite(breite, hoehe, vorschlag_zeigen, uebersicht):
+    """Die Breite, auf die das Foto verkleinert wird, damit die Seite MAX_KANTE einhält.
+
+    Nie größer als das Foto selbst.
+    """
+    def seite(b):
+        gesamt = b + randbreite(b, vorschlag_zeigen)
+        kasten = _uebersicht_setzen(uebersicht, b, gesamt)[1] if uebersicht is not None else 0
+        return gesamt, round(hoehe * b / breite) + kopfhoehe(b) + kasten
+
+    b = breite
+    for _ in range(4):
+        kante = max(seite(b))
+        if kante <= MAX_KANTE:
+            break
+        b = max(1, int(b * MAX_KANTE / kante))
+    return b
+
+
+def _foto_laden(pfad, vorschlag_zeigen, uebersicht):
+    """Lädt das Foto aufrecht und in der Größe für die Ausgabe: (bild, faktor)."""
+    with Image.open(pfad) as roh:
+        foto = ImageOps.exif_transpose(roh).convert("RGB")
+    breite, hoehe = foto.size
+    ziel = _fotobreite(breite, hoehe, vorschlag_zeigen, uebersicht)
+    if ziel >= breite:
+        return foto, 1
+    faktor = ziel / breite
+    return foto.resize((ziel, max(1, round(hoehe * faktor))), Image.LANCZOS), faktor
+
+
+def _skaliert(zeichen, faktor):
+    if faktor == 1:
+        return zeichen
+    return [{**z, **{feld: z[feld] * faktor for feld in ("x", "y", "breite", "hoehe")}}
+            for z in zeichen]
+
+
+def seitenbilder(speicher, aufgabe, arbeit, eigene=None):
+    """Erzeugt nacheinander die Seiten einer Arbeit als Bilder für das PDF.
+
+    `arbeit` ist eine Arbeit, wie `speicher.arbeit` sie liefert. Jede Seite trägt den Kopf
+    mit Aufgabentitel, Kürzel der Arbeit und Seitenzahl, die letzte die Fehlerübersicht.
+    Keine Kante ist länger als MAX_KANTE. `RegelFehler`, wenn das Foto einer Seite fehlt.
+    """
+    if eigene is None:
+        eigene = speicher.kuerzel()
+    vorschlag_zeigen = bool(aufgabe["vorschlag_in_ausgabe"])
+    seitenzahl = len(arbeit["seiten"])
+    for nummer, seite in enumerate(arbeit["seiten"], start=1):
+        uebersicht = fehleruebersicht(arbeit["seiten"], eigene) if nummer == seitenzahl else None
+        try:
+            foto, faktor = _foto_laden(speicher.bildpfad(seite["bilddatei"]), vorschlag_zeigen,
+                                       uebersicht)
+        except OSError as fehler:
+            raise RegelFehler(f"Das Foto zu Seite {nummer} der Arbeit {arbeit['kuerzel']} fehlt "
+                              "oder ist nicht lesbar. Das PDF wurde nicht erzeugt.") from fehler
+        kopf = f"{aufgabe['titel']} · Arbeit {arbeit['kuerzel']} · Seite {nummer} von {seitenzahl}"
+        bild = seite_zeichnen(foto, _skaliert(seite["zeichen"], faktor), vorschlag_zeigen, kopf,
+                              uebersicht)
+        if max(bild.size) > MAX_KANTE:   # etwa eine übervolle Randspalte
+            bild.thumbnail((MAX_KANTE, MAX_KANTE), Image.LANCZOS)
+        yield bild
+
+
+def _als_pdf(bilder, titel):
+    """Fasst die Seitenbilder zu einem PDF zusammen, je Seite ein Bild."""
+    erste, *weitere = bilder
+    puffer = io.BytesIO()
+    erste.save(puffer, "PDF", save_all=True, append_images=weitere, resolution=AUFLOESUNG,
+               quality=JPEG_QUALITAET, title=titel)
+    return puffer.getvalue()
+
+
+def _bestaetigte_arbeit(speicher, arbeit_id):
+    """Die Arbeit mit Seiten und Zeichen, wenn ihre Korrektur bestätigt ist; sonst None."""
+    arbeit = speicher.arbeit(arbeit_id)
+    if arbeit is None or arbeit["bestaetigt_am"] is None or not arbeit["seiten"]:
+        return None
+    return arbeit
+
+
+def arbeit_als_pdf(speicher, arbeit_id):
+    """Das PDF einer Arbeit als Bytes: je Foto eine Seite.
+
+    `RegelFehler`, wenn die Korrektur der Arbeit nicht bestätigt ist (oder es die Arbeit
+    nicht mehr gibt): Ausgegeben wird nur, was die Lehrkraft insgesamt bestätigt hat.
+    """
+    arbeit = _bestaetigte_arbeit(speicher, arbeit_id)
+    aufgabe = speicher.aufgabe(arbeit["aufgabe_id"]) if arbeit else None
+    if aufgabe is None:
+        raise RegelFehler("Die Korrektur dieser Arbeit ist nicht bestätigt. Ein PDF gibt es "
+                          "erst nach „Korrektur gesamt bestätigen“.")
+    return _als_pdf(list(seitenbilder(speicher, aufgabe, arbeit)),
+                    f"{aufgabe['titel']} – Arbeit {arbeit['kuerzel']}")
+
+
+def aufgabe_als_pdf(speicher, aufgabe_id):
+    """Das Sammel-PDF einer Aufgabe: (bytes, enthalten, fehlend).
+
+    Enthält alle bestätigten Arbeiten in Stapelreihenfolge, jede ab einer neuen Seite.
+    `enthalten` und `fehlend` zählen die aufgenommenen und die nicht bestätigten Arbeiten.
+    `RegelFehler`, wenn keine Arbeit bestätigt ist.
+
+    Alle Seiten liegen bis zum Schreiben als Bilder im Arbeitsspeicher (bis etwa 15 MB je
+    Seite); für einen Klassensatz reicht das.
+    """
+    aufgabe = speicher.aufgabe(aufgabe_id)
+    reihe = speicher.arbeiten(aufgabe_id) if aufgabe else []
+    eigene = speicher.kuerzel()
+    bilder, enthalten = [], 0
+    for eintrag in reihe:
+        if eintrag["bestaetigt_am"] is None:
+            continue
+        arbeit = _bestaetigte_arbeit(speicher, eintrag["id"])   # ein Stand je Arbeit
+        if arbeit is None:
+            continue
+        bilder.extend(seitenbilder(speicher, aufgabe, arbeit, eigene))
+        enthalten += 1
+    if not enthalten:
+        raise RegelFehler("In dieser Aufgabe ist noch keine Korrektur bestätigt. Das Sammel-PDF "
+                          "enthält nur Arbeiten nach „Korrektur gesamt bestätigen“.")
+    titel = f"{aufgabe['titel']} – {enthalten} von {len(reihe)} Arbeiten"
+    return _als_pdf(bilder, titel), enthalten, len(reihe) - enthalten

@@ -1,8 +1,13 @@
 """Etappe 3: Seiten für die Ausgabe zeichnen und als PDF zusammenfassen."""
+import io
+import re
+
 import pytest
 from PIL import Image
 
 from webapp import ausgabe
+from webapp.regeln import RegelFehler
+from webapp.speicher import Speicher
 
 B, H = 600, 400
 WEISS = (255, 255, 255)
@@ -329,3 +334,233 @@ def test_ohne_systemschrift_wird_die_standardschrift_genommen(monkeypatch):
         assert max(p[0] for p in _bunte(aus)) < aus.width - 2
     finally:
         ausgabe.schrift.cache_clear()
+
+
+# --- PDF je Arbeit und Sammel-PDF -----------------------------------------------------------
+
+@pytest.fixture
+def speicher(tmp_path):
+    return Speicher(tmp_path / "daten")
+
+
+def _jpeg(groesse=(B, H)):
+    puffer = io.BytesIO()
+    Image.new("RGB", groesse, "white").save(puffer, format="JPEG")
+    return puffer.getvalue()
+
+
+def _aufgabe(speicher, **felder):
+    werte = {"titel": "Versuchsbeschreibung", "fach": "Deutsch", "jahrgang": 9,
+             "kategorien": ["R", "Z", "Gr"], "verfahren": "gemini", **felder}
+    return speicher.aufgabe_anlegen(**werte)
+
+
+def _arbeit(speicher, aufgabe_id, *zeichen, seitenzahl=1, groesse=(B, H), bestaetigen=True):
+    """Eine fertig analysierte Arbeit; die Zeichen stehen auf der ersten Seite.
+
+    Gibt (arbeit_id, seiten_ids) zurück.
+    """
+    seiten = speicher.arbeit_anlegen(aufgabe_id, [(f"{i}.jpg", _jpeg(groesse))
+                                                  for i in range(seitenzahl)])
+    for seite_id in seiten:
+        lauf = speicher.seite_lauf_beginnen(seite_id)
+        assert speicher.zeichen_ersetzen(seite_id, lauf, []) is True
+        speicher.seite_status(seite_id, "fertig", transkription="Text")
+    for z in zeichen:
+        speicher.zeichen_anlegen(seiten[0], z)
+    arbeit_id = speicher.seite(seiten[0])["arbeit_id"]
+    if bestaetigen:
+        assert speicher.arbeit_bestaetigen(arbeit_id) is not None
+    return arbeit_id, seiten
+
+
+def _seitenzahl(pdf):
+    """Zählt die Seitenobjekte im PDF (ohne den Seitenbaum `/Pages`)."""
+    return len(re.findall(rb"/Type\s*/Page\b(?!s)", pdf))
+
+
+def _bildmasse(pdf):
+    """Die Größen der eingebetteten Bilder als [(breite, hoehe)]."""
+    breiten = [int(n) for n in re.findall(rb"/Width (\d+)", pdf)]
+    hoehen = [int(n) for n in re.findall(rb"/Height (\d+)", pdf)]
+    assert len(breiten) == len(hoehen)
+    return list(zip(breiten, hoehen))
+
+
+def test_arbeit_als_pdf_liefert_ein_pdf_mit_einer_seite_je_foto(speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id, _ = _arbeit(speicher, nr, _z(), seitenzahl=2)
+    pdf = ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+    assert isinstance(pdf, bytes) and pdf.startswith(b"%PDF") and b"%%EOF" in pdf[-64:]
+    assert _seitenzahl(pdf) == 2
+    # Je Seite ein Bild: das Foto mit Randspalte und Kopf; die letzte Seite trägt den Kasten.
+    (b1, h1), (b2, h2) = _bildmasse(pdf)
+    assert b1 == b2 == B + ausgabe.randbreite(B)
+    assert h1 == H + ausgabe.kopfhoehe(B) and h2 > h1
+
+
+def test_arbeit_als_pdf_laesst_fotos_und_bestaetigung_unberuehrt(speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id, (seite_id,) = _arbeit(speicher, nr, _z())
+    pfad = speicher.bildpfad(speicher.seite(seite_id)["bilddatei"])
+    vorher, stand = pfad.read_bytes(), speicher.arbeit(arbeit_id)["stand"]
+    ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+    assert pfad.read_bytes() == vorher
+    assert speicher.arbeit(arbeit_id)["stand"] == stand
+    assert speicher.arbeit(arbeit_id)["bestaetigt_am"] is not None
+
+
+def test_nicht_bestaetigte_arbeit_wirft_regelfehler(speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id, _ = _arbeit(speicher, nr, _z(), bestaetigen=False)
+    with pytest.raises(RegelFehler, match="bestätigt"):
+        ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+
+
+def test_verfallene_bestaetigung_wirft_regelfehler(speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id, (seite_id,) = _arbeit(speicher, nr, _z())
+    speicher.zeichen_anlegen(seite_id, _z("Z", x=300))   # jede Änderung hebt die Bestätigung auf
+    with pytest.raises(RegelFehler):
+        ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+
+
+def test_unbekannte_arbeit_wirft_regelfehler(speicher):
+    with pytest.raises(RegelFehler):
+        ausgabe.arbeit_als_pdf(speicher, 999)
+
+
+def test_fehlendes_foto_wirft_regelfehler_mit_seitennummer(speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id, (s1, s2) = _arbeit(speicher, nr, seitenzahl=2)
+    speicher.bildpfad(speicher.seite(s2)["bilddatei"]).unlink()
+    with pytest.raises(RegelFehler, match="Seite 2"):
+        ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+
+
+def test_aufgabe_als_pdf_enthaelt_nur_bestaetigte_arbeiten(speicher):
+    nr = _aufgabe(speicher)
+    _arbeit(speicher, nr, _z(), seitenzahl=2)
+    _arbeit(speicher, nr, _z(), seitenzahl=3, bestaetigen=False)
+    _arbeit(speicher, nr, seitenzahl=1)
+    pdf, enthalten, fehlend = ausgabe.aufgabe_als_pdf(speicher, nr)
+    assert pdf.startswith(b"%PDF") and _seitenzahl(pdf) == 3
+    assert (enthalten, fehlend) == (2, 1)
+
+
+def test_aufgabe_als_pdf_nimmt_nur_arbeiten_der_aufgabe(speicher):
+    nr, andere = _aufgabe(speicher), _aufgabe(speicher, titel="Andere")
+    _arbeit(speicher, nr, seitenzahl=1)
+    _arbeit(speicher, andere, seitenzahl=2)
+    pdf, enthalten, fehlend = ausgabe.aufgabe_als_pdf(speicher, nr)
+    assert _seitenzahl(pdf) == 1 and (enthalten, fehlend) == (1, 0)
+
+
+def test_aufgabe_als_pdf_ohne_bestaetigte_arbeit_wirft_regelfehler(speicher):
+    nr = _aufgabe(speicher)
+    with pytest.raises(RegelFehler, match="bestätigt"):
+        ausgabe.aufgabe_als_pdf(speicher, nr)
+    _arbeit(speicher, nr, _z(), bestaetigen=False)
+    with pytest.raises(RegelFehler, match="bestätigt"):
+        ausgabe.aufgabe_als_pdf(speicher, nr)
+    with pytest.raises(RegelFehler):
+        ausgabe.aufgabe_als_pdf(speicher, 999)
+
+
+def test_sehr_grosse_bilder_werden_auf_2400_pixel_kante_verkleinert(speicher):
+    nr = _aufgabe(speicher)
+    quer, _ = _arbeit(speicher, nr, _z(), groesse=(4000, 3000))
+    hoch, _ = _arbeit(speicher, nr, _z(), groesse=(3000, 4200))
+    for arbeit_id in (quer, hoch):
+        ((breite, hoehe),) = _bildmasse(ausgabe.arbeit_als_pdf(speicher, arbeit_id))
+        assert 2390 <= max(breite, hoehe) <= 2400
+
+
+def test_kleine_bilder_werden_nicht_vergroessert(speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id, _ = _arbeit(speicher, nr)
+    ((breite, hoehe),) = _bildmasse(ausgabe.arbeit_als_pdf(speicher, arbeit_id))
+    assert breite == B + ausgabe.randbreite(B)
+
+
+def test_seitenbilder_tragen_die_zeichen_an_der_verkleinerten_stelle(speicher):
+    nr = _aufgabe(speicher)
+    z = _z("Z", x=1000, y=2000, breite=800, hoehe=200)
+    arbeit_id, _ = _arbeit(speicher, nr, z, _z("R", x=100, y=100, status="verworfen"),
+                           groesse=(4000, 3000), seitenzahl=2)
+    erste, zweite = ausgabe.seitenbilder(speicher, speicher.aufgabe(nr),
+                                         speicher.arbeit(arbeit_id))
+    assert max(erste.size) <= 2400 and max(zweite.size) <= 2400
+    foto_b = round(erste.width / (1 + ausgabe.RAND_ANTEIL))
+    faktor = foto_b / 4000
+    kopf = ausgabe.kopfhoehe(foto_b)
+    blau = [p for p in _bunte(erste, (0, kopf, foto_b, erste.height))
+            if erste.getpixel(p) == ausgabe.farbe("Z")]
+    assert blau
+    xs, ys = [p[0] for p in blau], [p[1] for p in blau]
+    assert abs(min(xs) - 1000 * faktor) <= 2 and abs(max(xs) - 1800 * faktor) <= 2
+    assert 0 <= min(ys) - kopf - 2200 * faktor <= 3 * ausgabe.strichstaerke(foto_b)
+    # Verworfenes erscheint nicht; die zweite Seite hat keine Zeichen, aber die Übersicht.
+    assert not [p for p in _bunte(erste) if erste.getpixel(p) == ausgabe.farbe("R")]
+    assert zweite.height > erste.height
+    assert [p for p in _bunte(zweite) if zweite.getpixel(p) == ausgabe.farbe("Z")]
+
+
+def test_richtige_schreibung_folgt_der_einstellung_der_aufgabe(speicher):
+    nr = _aufgabe(speicher, vorschlag_in_ausgabe=True)
+    arbeit_id, _ = _arbeit(speicher, nr, _z())
+    ((breite, _),) = _bildmasse(ausgabe.arbeit_als_pdf(speicher, arbeit_id))
+    assert breite == B + ausgabe.randbreite(B, True)
+
+
+def _mitschreiben(monkeypatch):
+    """Merkt sich Kopf und Übersicht jedes Aufrufs von `seite_zeichnen`."""
+    aufrufe = []
+    echt = ausgabe.seite_zeichnen
+
+    def mitschreiben(bild, zeichen, vorschlag_zeigen=False, kopf="", uebersicht=None):
+        aufrufe.append((kopf, uebersicht))
+        return echt(bild, zeichen, vorschlag_zeigen, kopf, uebersicht)
+
+    monkeypatch.setattr(ausgabe, "seite_zeichnen", mitschreiben)
+    return aufrufe
+
+
+def test_kopf_nennt_titel_kuerzel_und_seite(speicher, monkeypatch):
+    nr = _aufgabe(speicher, titel="Erörterung")
+    arbeit_id, _ = _arbeit(speicher, nr, _z("Gr"), seitenzahl=2)
+    speicher.arbeit_kuerzel_setzen(arbeit_id, "Ä7")
+    aufrufe = _mitschreiben(monkeypatch)
+    ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+    # Die Fehlerübersicht steht nur auf der letzten Seite und zählt die ganze Arbeit.
+    assert aufrufe == [
+        ("Erörterung · Arbeit Ä7 · Seite 1 von 2", None),
+        ("Erörterung · Arbeit Ä7 · Seite 2 von 2",
+         [{"kuerzel": "Gr", "bezeichnung": "Grammatik", "anzahl": 1}])]
+
+
+def test_sammel_pdf_beginnt_jede_arbeit_mit_seite_1_in_stapelreihenfolge(speicher, monkeypatch):
+    nr = _aufgabe(speicher)
+    _arbeit(speicher, nr, seitenzahl=2)
+    _arbeit(speicher, nr, seitenzahl=1)
+    aufrufe = _mitschreiben(monkeypatch)
+    ausgabe.aufgabe_als_pdf(speicher, nr)
+    assert [(kopf, uebersicht is not None) for kopf, uebersicht in aufrufe] == [
+        ("Versuchsbeschreibung · Arbeit 01 · Seite 1 von 2", False),
+        ("Versuchsbeschreibung · Arbeit 01 · Seite 2 von 2", True),
+        ("Versuchsbeschreibung · Arbeit 02 · Seite 1 von 1", True)]
+
+
+def test_fehleruebersicht_zaehlt_bestaetigte_zeichen_aller_seiten():
+    eigene = [{"kuerzel": "W", "bezeichnung": "Wortwahl"},
+              {"kuerzel": "A", "bezeichnung": "Ausdruck"}]
+    seiten = [{"zeichen": [_z("W"), _z("Gr"), _z("R"), _z("R", status="verworfen"),
+                           _z("Z", status="offen")]},
+              {"zeichen": [_z("R", herkunft="hand"), _z("A"), _z("weg")]}]
+    assert ausgabe.fehleruebersicht(seiten, eigene) == [
+        {"kuerzel": "R", "bezeichnung": "Rechtschreibung", "anzahl": 2},
+        {"kuerzel": "Gr", "bezeichnung": "Grammatik", "anzahl": 1},
+        {"kuerzel": "A", "bezeichnung": "Ausdruck", "anzahl": 1},
+        {"kuerzel": "W", "bezeichnung": "Wortwahl", "anzahl": 1},
+        {"kuerzel": "weg", "bezeichnung": "", "anzahl": 1}]   # entferntes Kürzel: ohne Namen
+    assert ausgabe.fehleruebersicht([{"zeichen": []}], eigene) == []
