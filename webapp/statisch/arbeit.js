@@ -3,6 +3,8 @@
 // die Gesamtbestätigung der Arbeit, die Neuanalyse der Seite und das Kürzel der Arbeit.
 // Jede Änderung wird sofort gespeichert; schlägt das Speichern fehl, kehrt die
 // Anzeige zum vorherigen Zustand zurück.
+// Der Stand der Arbeit (offene Vorschläge, Bestätigung, Zustand aller Seiten) kommt immer vom
+// Server und trägt dessen Änderungszähler `stand`; ein älterer Stand überholt nie einen neueren.
 // Die Rahmen stehen in Prozent der Bildgröße; Fenstergröße und Zoom brauchen keine Umrechnung.
 (function () {
   "use strict";
@@ -44,8 +46,13 @@
   var MINDESTKANTE = 4;    // Pixel des Bildes, wie in den Regeln
   var KLEINSTER_ENTWURF = 6;
   var SCHWELLE = 3;        // Bildschirmpixel; darunter gilt ein Zeigerdruck als Klick
-  var folge = 0;           // laufende Nummer der Anfragen
-  var angewandt = 0;       // Nummer der Anfrage, deren Stand der Arbeit zuletzt gezeigt wurde
+  var laufend = 0;         // schreibende Anfragen, die noch unterwegs sind
+  var laedtNach = false;   // der Stand der Arbeit wird gerade nachgeladen
+  var nochmalLaden = false;
+  var abfrageUhr = null;   // Wecker der nächsten Abfrage, solange eine Seite analysiert wird
+  var sprungFaellig = false;  // nach einer Entscheidung steht der Sprung zum Nächsten noch aus
+  var fragt = false;       // ein Dialog holt gerade den frischen Stand
+  var ABSTAND_MS = 2000;
   var seitenstatus = "fertig";
 
   daten.zeichen.concat(daten.verworfen).forEach(function (z) { zeichen[z.id] = z; });
@@ -66,7 +73,9 @@
     meldung.className = "meldung schwebend " + (art || "fehler");
     meldung.hidden = false;
     if (meldungUhr !== null) { window.clearTimeout(meldungUhr); }
-    meldungUhr = window.setTimeout(meldungSchliessen, art === "hinweis" ? 5000 : 15000);
+    // Ein Hinweis bleibt je nach Länge stehen, eine Fehlermeldung länger.
+    meldungUhr = window.setTimeout(meldungSchliessen,
+      art === "hinweis" ? Math.max(5000, 70 * text.length) : 15000);
   }
 
   function meldungSchliessen() {
@@ -98,6 +107,25 @@
       });
     }, function () {
       throw { meldung: FEHLER_NETZ };
+    });
+  }
+
+  // Eine schreibende Anfrage. Ist danach keine mehr unterwegs, wird der Stand der Arbeit
+  // einmal nachgeladen: Erst dann stimmen Kopfzeile, Fußleiste und der Sprung des Fokus sicher.
+  function schreiben(url, koerper) {
+    laufend++;
+    function fertig() {
+      laufend--;
+      window.setTimeout(function () {  // erst nach den Schritten, die die Antwort auswerten
+        if (laufend === 0) { nachladen(); }
+      }, 0);
+    }
+    return senden("POST", url, koerper).then(function (antwort) {
+      fertig();
+      return antwort;
+    }, function (fehler) {
+      fertig();
+      throw fehler;
     });
   }
 
@@ -166,6 +194,7 @@
     var e = el("div", "rahmen");
     e.setAttribute("role", "button");
     e.tabIndex = -1;  // per Klick fokussierbar; der Weg mit der Tastatur führt über die Liste
+    e.setAttribute("data-zeichen", z.id);
     e.appendChild(el("span", "etikett"));
     ["nw", "ne", "sw", "se"].forEach(function (ecke) {
       e.appendChild(el("span", "griffpunkt " + ecke)).setAttribute("data-ecke", ecke);
@@ -179,6 +208,7 @@
     e.addEventListener("pointermove", zugBewegen);
     e.addEventListener("pointerup", function (ereignis) { zugBeenden(ereignis, true); });
     e.addEventListener("pointercancel", function (ereignis) { zugBeenden(ereignis, false); });
+    e.addEventListener("lostpointercapture", function (ereignis) { zugBeenden(ereignis, false); });
     e.addEventListener("mouseenter", function () { nah(id, true); });
     e.addEventListener("mouseleave", function () { nah(id, false); });
   }
@@ -246,19 +276,29 @@
     rahmenLegen(zug.element, zug.neu);
   }
 
+  // Bricht das Ziehen ab: Der Rahmen liegt wieder, wo er war, und ein neuer Zug kann beginnen.
+  // Nötig auch, wenn der Rahmen mitten im Zug verschwindet; sonst käme das Loslassen nie an.
+  function zugAbbrechen() {
+    if (zug === null) { return; }
+    var ende = zug;
+    zug = null;
+    ende.element.classList.remove("gezogen");
+    try { ende.element.releasePointerCapture(ende.zeiger); } catch (fehler) { /* schon frei */ }
+    if (zeichen[ende.id]) { rahmenLegen(ende.element, zeichen[ende.id]); }
+  }
+
   // Loslassen: ohne Bewegung nur auswählen, sonst den neuen Rahmen speichern.
   function zugBeenden(ereignis, gueltig) {
     if (zug === null || ereignis.pointerId !== zug.zeiger) { return; }
+    if (!gueltig || !zeichen[zug.id] || !sichtbar(zeichen[zug.id])) {
+      zugAbbrechen();
+      return;
+    }
     var ende = zug;
     zug = null;
     ende.element.classList.remove("gezogen");
     try { ende.element.releasePointerCapture(ereignis.pointerId); } catch (fehler) { /* schon frei */ }
     var z = zeichen[ende.id];
-    if (!z) { return; }
-    if (!gueltig) {
-      rahmenLegen(ende.element, z);
-      return;
-    }
     if (gewaehlt !== ende.id) { waehlen(ende.id, "bild"); }
     ende.element.focus({ preventScroll: true });
     if (!ende.bewegt || ende.neu === null) { return; }
@@ -284,6 +324,7 @@
       (z.id === gewaehlt ? " gewaehlt" : "") +
       (unterwegs[z.id] ? " unterwegs" : "");
     e.hidden = !sichtbar(z);
+    if (e.hidden && zug !== null && zug.id === z.id) { zugAbbrechen(); }
     e.setAttribute("aria-label", beschreibung(z));
     e.firstChild.textContent = z.kategorie;
     if (!wirdGezogen(z.id)) { rahmenLegen(e, z); }
@@ -314,7 +355,8 @@
     return [["zurueckholen", "Zurückholen"], ["verwerfen", "Verwerfen"], ["aendern", "Ändern"]];
   }
 
-  function eintragBauen(z) {
+  // `ohneFormular`: Das offene Formular „Ändern“ hängt der Aufrufer selbst um.
+  function eintragBauen(z, ohneFormular) {
     var punkt = el("li", "eintrag " + farbklasse(z) + " " + zustandsklasse(z) +
       (z.id === gewaehlt ? " gewaehlt" : "") + (unterwegs[z.id] ? " unterwegs" : ""));
     punkt.setAttribute("data-zeichen", z.id);
@@ -358,7 +400,7 @@
       });
       punkt.appendChild(reihe);
     }
-    eintragErgaenzen(punkt, z);
+    if (!ohneFormular) { eintragErgaenzen(punkt, z); }
     return punkt;
   }
 
@@ -431,9 +473,14 @@
     if (z.herkunft === "ki" && z.status === "offen") {
       formular.appendChild(el("p", "leise", "Ein geänderter Vorschlag gilt als bestätigt."));
     }
+    var fehler = el("p", "formularfehler");
+    fehler.setAttribute("role", "alert");
+    fehler.hidden = true;
+    formular.appendChild(fehler);
     formular.addEventListener("submit", function (ereignis) {
       ereignis.preventDefault();
-      aendernSpeichern(z.id, kuerzel.value, vorschlag.value.trim());
+      if (sichern.disabled) { return; }
+      aendernSpeichern(z.id, kuerzel.value, vorschlag.value.trim(), formular);
     });
     formularTasten(formular, function () { aendernSchliessen(true); });
     return formular;
@@ -466,9 +513,19 @@
     if (mitFokus) { eintragFokus(id); }
   }
 
-  function aendernSpeichern(id, kategorie, vorschlag) {
+  // Zeigt im Formular, ob gerade gespeichert wird, und die Meldung eines gescheiterten Versuchs.
+  function formularStellen(formular, beschaeftigt, meldungstext) {
+    formular.querySelector('button[type="submit"]').disabled = beschaeftigt;
+    var fehler = formular.querySelector(".formularfehler");
+    fehler.textContent = meldungstext || "";
+    fehler.hidden = !meldungstext;
+  }
+
+  // Speichert die Eingaben des Formulars. Es bleibt offen, bis die Route geantwortet hat:
+  // Scheitert sie, stehen die Eingaben noch da, und das Formular nennt den Grund.
+  function aendernSpeichern(id, kategorie, vorschlag, formular) {
     var z = zeichen[id];
-    if (!z) { return; }
+    if (!z || unterwegs[id]) { return; }
     var koerper = {};
     if (kategorie !== z.kategorie) { koerper.kategorie = kategorie; }
     if (vorschlag !== (z.vorschlag || "")) { koerper.vorschlag = vorschlag; }
@@ -482,9 +539,20 @@
       vorlaeufig.status = "bestaetigt";
       vorlaeufig.bestaetigt_wie = "geaendert";
     }
-    formularFuer = null;
-    if (!speichern(id, "aendern", vorlaeufig, koerper, warOffen)) { zeichnen(id); }
-    if (gewaehlt === id) { eintragFokus(id); }
+    formularStellen(formular, true, "");
+    var begonnen = speichern(id, "aendern", vorlaeufig, koerper, warOffen, {
+      gelungen: function () {
+        if (formularFuer === id) { aendernSchliessen(gewaehlt === id); }
+      },
+      gescheitert: function (text) {
+        if (formularFuer !== id || !formular.isConnected) { return false; }
+        formularStellen(formular, false, text);
+        inSicht($("listenspalte"), formular, false);
+        formular.querySelector("input").focus({ preventScroll: true });
+        return true;
+      }
+    });
+    if (!begonnen) { formularStellen(formular, false, ""); }
   }
 
   // Zeichnet Rahmen und Listenpunkt eines Zeichens neu; der Fokus bleibt, wo er war.
@@ -492,6 +560,7 @@
     var z = zeichen[id];
     if (!z) {
       if (formularFuer === id) { formularFuer = null; }
+      if (zug !== null && zug.id === id) { zugAbbrechen(); }
       if (rahmen[id]) { rahmen[id].remove(); delete rahmen[id]; }
       if (eintraege[id]) { eintraege[id].remove(); delete eintraege[id]; }
       return;
@@ -504,13 +573,27 @@
 
     var alt = eintraege[id];
     if (!sichtbar(z)) {
+      if (formularFuer === id) { formularFuer = null; }
       if (alt) { alt.remove(); delete eintraege[id]; }
       return;
     }
-    var neu = eintragBauen(z);
-    var fokus = alt && alt.contains(document.activeElement)
+    // Ein offenes Formular „Ändern“ bleibt mit Eingaben und Fokus stehen: Es wird nicht neu
+    // gebaut, sondern der Rest des Listenpunkts um es herum erneuert.
+    var formular = alt && formularFuer === id ? alt.querySelector("form.zeichenformular") : null;
+    var neu = eintragBauen(z, formular !== null);
+    var fokus = alt && alt.contains(document.activeElement) &&
+      !(formular && formular.contains(document.activeElement))
       ? document.activeElement.getAttribute("data-akt") : null;
-    if (alt) { liste.replaceChild(neu, alt); } else { liste.appendChild(neu); }
+    if (formular) {
+      alt.className = neu.className;
+      while (alt.firstChild !== formular) { alt.removeChild(alt.firstChild); }
+      while (neu.firstChild) { alt.insertBefore(neu.firstChild, formular); }
+      neu = alt;
+    } else if (alt) {
+      liste.replaceChild(neu, alt);
+    } else {
+      liste.appendChild(neu);
+    }
     eintraege[id] = neu;
     if (fokus) {
       (neu.querySelector('[data-akt="' + fokus + '"]:not(:disabled)') ||
@@ -554,9 +637,6 @@
       " auf dieser Seite, " + (offen ? offen + " offen" : "keines offen");
     $("verworfen-zahl").textContent = "(" + verworfen + ")";
     $("liste-leer").hidden = liste.children.length > 0;
-    daten.seiten.forEach(function (s) {
-      if (s.id === seite.id) { s.offen = offen; }
-    });
   }
 
   function arbeitZeigen() {
@@ -567,25 +647,114 @@
     fussleisteZeigen();
   }
 
+  function seiteUnfertig() {
+    return daten.seiten.some(function (s) { return s.status !== "fertig"; });
+  }
+
+  function seiteInAnalyse() {
+    return daten.seiten.some(function (s) { return s.status === "wartet" || s.status === "laeuft"; });
+  }
+
   // Die Knöpfe der Fußleiste folgen dem Stand der Arbeit.
   function fussleisteZeigen() {
     var bestaetigt = Boolean(arbeit.bestaetigt_am);
-    $("gesamt-knopf").disabled = gesperrt || bestaetigt || !arbeit.bestaetigbar;
+    $("gesamt-knopf").disabled = gesperrt || fragt || bestaetigt || !arbeit.bestaetigbar;
     $("gesamt-grund").textContent = bestaetigt ? "Die Korrektur ist bestätigt."
       : (arbeit.bestaetigbar ? "" : arbeit.grund || "");
-    $("rest-knopf").disabled = gesperrt || arbeit.offen === 0;
+    // Solange eine Seite der Arbeit nicht fertig analysiert ist, wird nichts gesammelt bestätigt.
+    $("rest-knopf").disabled = gesperrt || fragt || arbeit.offen === 0 || seiteUnfertig();
     $("neu-analyse-knopf").disabled = seitenstatus !== "fertig" && seitenstatus !== "fehlgeschlagen";
   }
 
-  // Übernimmt den Stand der Arbeit aus einer Antwort; ältere Antworten überholen neuere nicht.
-  function arbeitStellen(stand, nummer) {
-    if (!stand || nummer < angewandt) { return; }
-    angewandt = nummer;
+  // Übernimmt den Stand der Arbeit aus einer Antwort. Maßgeblich ist der Änderungszähler des
+  // Servers: Ein Stand, der älter ist als der gezeigte, wird übergangen, gleich in welcher
+  // Reihenfolge die Antworten eintreffen. Gibt zurück, ob der Stand übernommen wurde.
+  function arbeitStellen(stand) {
+    if (!stand || typeof stand.stand !== "number" || stand.stand < arbeit.stand) { return false; }
+    arbeit.stand = stand.stand;
     arbeit.offen = stand.offen;
     arbeit.bestaetigt_am = stand.bestaetigt_am;
     arbeit.bestaetigbar = stand.bestaetigbar;
     arbeit.grund = stand.grund;
+    if (Array.isArray(stand.seiten)) { daten.seiten = stand.seiten; }
     arbeitZeigen();
+    seiteAbgleichen();
+    abfragePlanen();
+    return true;
+  }
+
+  // Hat sich der Analysestatus dieser Seite geändert (etwa eine Neuanalyse aus einem anderen
+  // Fenster) oder passen ihre offenen Vorschläge nicht mehr zum Server, lädt die Ansicht neu.
+  function seiteAbgleichen() {
+    var hier = null;
+    daten.seiten.forEach(function (s) { if (s.id === seite.id) { hier = s; } });
+    if (hier === null) { return; }
+    var anders = !gesperrt && laufend === 0 && !Object.keys(unterwegs).length &&
+      hier.status === seitenstatus && hier.offen !== offeneAufDerSeite();
+    if ((anders || hier.status !== seitenstatus) && !laedtSeite) {
+      laedtSeite = true;
+      // Eine Meldung, die gerade zu sehen ist, und der Grund des Neuladens überstehen es.
+      var notiz = [];
+      if (!meldung.hidden) { notiz.push($("meldung-text").textContent); }
+      if (anders) {
+        notiz.push("Die Zeichen dieser Seite wurden an anderer Stelle geändert. " +
+          "Die Ansicht zeigt jetzt den aktuellen Stand.");
+      }
+      try {
+        if (notiz.length) { window.sessionStorage.setItem(NOTIZ, notiz.join(" ")); }
+      } catch (fehler) { /* ohne Speicher lädt die Ansicht ohne Hinweis neu */ }
+      window.location.reload();
+    }
+  }
+
+  var laedtSeite = false;
+  var NOTIZ = "korrektor-notiz";
+
+  // Zeigt nach dem Neuladen, was die Ansicht davor noch zu sagen hatte.
+  function notizZeigen() {
+    try {
+      var text = window.sessionStorage.getItem(NOTIZ);
+      window.sessionStorage.removeItem(NOTIZ);
+      if (text) { melden(text, "hinweis"); }
+    } catch (fehler) { /* kein Speicher, kein Hinweis */ }
+  }
+
+  // Holt den Stand der Arbeit vom Server. Läuft schon eine Abfrage, folgt danach noch eine,
+  // damit nichts fehlt, was inzwischen geschah.
+  function nachladen() {
+    if (laedtNach) {
+      nochmalLaden = true;
+      return;
+    }
+    laedtNach = true;
+    if (abfrageUhr !== null) { window.clearTimeout(abfrageUhr); }
+    abfrageUhr = null;
+    function fertig() {
+      laedtNach = false;
+      if (nochmalLaden) {
+        nochmalLaden = false;
+        nachladen();
+        return;
+      }
+      if (sprungFaellig && laufend === 0) {
+        sprungFaellig = false;
+        weiterNachEntscheidung();
+      }
+      abfragePlanen();
+    }
+    senden("GET", "/arbeit/" + arbeit.id + "/zahlen").then(function (antwort) {
+      arbeitStellen(antwort.arbeit);
+      fertig();
+    }, fertig);  // ohne Antwort bleibt der gezeigte Stand; die nächste Gelegenheit holt ihn nach
+  }
+
+  // Solange eine Seite der Arbeit wartet oder läuft, alle zwei Sekunden nachfragen; danach nicht mehr.
+  function abfragePlanen() {
+    if (abfrageUhr !== null || laedtNach || !seiteInAnalyse()) { return; }
+    abfrageUhr = window.setTimeout(function () {
+      abfrageUhr = null;
+      nachladen();
+    }, ABSTAND_MS);
   }
 
   // --- Auswahl ------------------------------------------------------------------------------
@@ -631,6 +800,23 @@
     }
   }
 
+  // Fokus und Auswahl sind stets dasselbe Zeichen: Erhält ein Listenpunkt oder ein Rahmen den
+  // Fokus (etwa mit Tab), ist dieses Zeichen gewählt. Die Tasten wirken so nie auf ein anderes
+  // Zeichen als das, auf dem der Fokus steht.
+  function zeichenVon(element) {
+    var traeger = element && element.closest ? element.closest("[data-zeichen]") : null;
+    return traeger ? Number(traeger.getAttribute("data-zeichen")) : null;
+  }
+
+  liste.addEventListener("focusin", function (ereignis) {
+    var id = zeichenVon(ereignis.target);
+    if (id !== null && id !== gewaehlt && zeichen[id]) { waehlen(id, "liste"); }
+  });
+  ebene.addEventListener("focusin", function (ereignis) {
+    var id = zeichenVon(ereignis.target);
+    if (id !== null && id !== gewaehlt && zeichen[id]) { waehlen(id, "bild"); }
+  });
+
   // Das Formular „Ändern“ gehört zum gewählten Zeichen; wechselt die Auswahl, schließt es sich.
   function auswahlGewechselt() {
     if (formularFuer !== null && formularFuer !== gewaehlt) { aendernSchliessen(false); }
@@ -657,7 +843,7 @@
     var zahl = daten.seiten.length;
     for (var i = 1; i < zahl; i++) {
       var s = daten.seiten[(seite.nummer - 1 + i) % zahl];
-      if (s.offen > 0) { return s.nummer; }
+      if (s.id !== seite.id && s.offen > 0) { return s.nummer; }
     }
     return null;
   }
@@ -682,8 +868,9 @@
 
   // Nach einer gespeicherten Entscheidung: Ist auf der Seite nichts mehr offen, geht es zur
   // nächsten Seite mit offenen Vorschlägen; ist die ganze Arbeit durch, zur Gesamtbestätigung.
+  // Läuft erst, wenn keine Anfrage mehr unterwegs und der Stand der Arbeit nachgeladen ist.
   function weiterNachEntscheidung() {
-    if (Object.keys(unterwegs).length || offeneDerSeite().length) { return; }
+    if (laufend > 0 || Object.keys(unterwegs).length || offeneDerSeite().length) { return; }
     var nummer = naechsteSeiteMitOffenen();
     if (nummer !== null) {
       window.location.href = seitenUrl(nummer);
@@ -708,33 +895,44 @@
 
   // Zeigt die Änderung sofort, speichert sie und nimmt sie zurück, wenn das Speichern scheitert.
   // `vorlaeufig` sind die Felder, die sich voraussichtlich ändern; es gilt, was die Route meldet.
-  function speichern(id, pfad, vorlaeufig, koerper, entscheidung) {
+  // `formular` (für „Ändern“) nennt, was nach der Antwort mit dem offenen Formular geschieht:
+  // `gelungen()` und `gescheitert(Meldung)`; die Auswahl wandert dann erst nach dem Speichern.
+  function speichern(id, pfad, vorlaeufig, koerper, entscheidung, formular) {
     var z = zeichen[id];
     if (!z || unterwegs[id] || gesperrt) { return false; }
     var vorher = kopie(z);
-    var nummer = ++folge;
     var ziel = naechsterOffener(id);  // vor der Änderung: danach fehlt ein Verworfenes in der Reihe
     Object.keys(vorlaeufig).forEach(function (feld) { z[feld] = vorlaeufig[feld]; });
     unterwegs[id] = true;
     zeichnen(id);
     zahlenZeigen();
-    if (entscheidung || !sichtbar(z)) {
-      if (ziel !== null) { waehlen(ziel, "taste"); } else if (!sichtbar(z)) { waehlen(null); }
+    function weiter() {
+      if (ziel !== null && zeichen[ziel] && zeichen[ziel].status === "offen") {
+        waehlen(ziel, "taste");
+      } else if (!zeichen[id] || !sichtbar(zeichen[id])) {
+        waehlen(null);
+      }
     }
-    senden("POST", "/zeichen/" + id + "/" + pfad, koerper).then(function (antwort) {
+    if (!formular && (entscheidung || !sichtbar(z))) { weiter(); }
+    schreiben("/zeichen/" + id + "/" + pfad, koerper).then(function (antwort) {
       delete unterwegs[id];
       if (antwort.zeichen) { zeichen[id] = antwort.zeichen; }
-      arbeitStellen(antwort.arbeit, nummer);
+      arbeitStellen(antwort.arbeit);
       zeichnen(id);
       listeOrdnen();
       zahlenZeigen();
-      if (entscheidung) { weiterNachEntscheidung(); }
+      if (formular) {
+        formular.gelungen();
+        if (entscheidung && gewaehlt === id) { weiter(); }
+      }
+      if (entscheidung) { sprungFaellig = true; }
     }, function (fehler) {
       delete unterwegs[id];
       zeichen[id] = vorher;
       zeichnen(id);
       listeOrdnen();
       zahlenZeigen();
+      if (formular && formular.gescheitert(fehlertext(fehler))) { return; }
       melden(fehlertext(fehler));
       waehlen(id, "taste");
     });
@@ -772,16 +970,15 @@
       melden("Vorschläge der KI werden verworfen, nicht gelöscht (Taste V).", "hinweis");
       return;
     }
-    var nummer = ++folge;
     var ziel = naechsterOffener(id);
     unterwegs[id] = true;
     delete zeichen[id];
     zeichnen(id);
     zahlenZeigen();
     if (gewaehlt === id) { waehlen(ziel, "taste"); }
-    senden("POST", "/zeichen/" + id + "/loeschen").then(function (antwort) {
+    schreiben("/zeichen/" + id + "/loeschen").then(function (antwort) {
       delete unterwegs[id];
-      arbeitStellen(antwort.arbeit, nummer);
+      arbeitStellen(antwort.arbeit);
     }, function (fehler) {
       delete unterwegs[id];
       zeichen[id] = z;
@@ -916,21 +1113,20 @@
   neuFormular.addEventListener("submit", function (ereignis) {
     ereignis.preventDefault();
     if (entwurf === null || $("neu-setzen").disabled) { return; }
-    var nummer = ++folge;
     var lage = entwurf.lage;
     var koerper = { kategorie: $("neu-kuerzel").value, typ: $("neu-typ").value,
                     x: lage.x, y: lage.y, breite: lage.breite, hoehe: lage.hoehe };
     var vorschlag = $("neu-vorschlag").value.trim();
     if (vorschlag) { koerper.vorschlag = vorschlag; }
     $("neu-setzen").disabled = true;
-    senden("POST", "/seite/" + seite.id + "/zeichen", koerper).then(function (antwort) {
+    schreiben("/seite/" + seite.id + "/zeichen", koerper).then(function (antwort) {
       $("neu-setzen").disabled = false;
       letztesKuerzel = koerper.kategorie;
       setzenStellen(false);
-      arbeitStellen(antwort.arbeit, nummer);
       var z = antwort.zeichen;
+      if (z) { zeichen[z.id] = z; }
+      arbeitStellen(antwort.arbeit);
       if (!z) { return; }
-      zeichen[z.id] = z;
       zeichnen(z.id);
       listeOrdnen();
       zahlenZeigen();
@@ -957,95 +1153,127 @@
 
   // Öffnet die Rückfrage; Esc und „Abbrechen“ schließen sie ohne Wirkung.
   function fragen(dialog, beiJa) {
-    dialog.returnValue = "";
-    dialog.onclose = function () {
-      if (dialog.returnValue === "ja") { beiJa(); }
+    // Das „Ja“ gilt mit dem Absenden des Formulars im Dialog, nicht erst mit dessen Schließen:
+    // Das Ereignis `close` kommt in einem verdeckten Fenster verspätet.
+    dialog.querySelector("form").onsubmit = function (ereignis) {
+      if (ereignis.submitter && ereignis.submitter.value === "ja") { beiJa(); }
     };
     dialog.showModal();
   }
 
+  // Holt vor einer Rückfrage den frischen Stand der Arbeit und gibt die Antwort an `weiter`.
+  // Der Dialog zeigt so nie Zahlen, die inzwischen überholt sind, und schickt den Stand mit,
+  // den er gezeigt hat; hat sich bis zum „Ja“ noch etwas geändert, lehnt die App ab.
+  function frischFragen(weiter) {
+    if (fragt) { return; }
+    fragt = true;
+    fussleisteZeigen();
+    senden("GET", "/arbeit/" + arbeit.id + "/zahlen").then(function (antwort) {
+      fragt = false;
+      arbeitStellen(antwort.arbeit);
+      fussleisteZeigen();
+      weiter(antwort);
+    }, function (fehler) {
+      fragt = false;
+      fussleisteZeigen();
+      melden(fehlertext(fehler));
+    });
+  }
+
   $("rest-knopf").addEventListener("click", function () {
-    var zahl = arbeit.offen;
-    if (!zahl || gesperrt) { return; }
-    var hier = offeneAufDerSeite();
-    $("rest-text").textContent = (zahl === 1
-      ? "In dieser Arbeit ist noch 1 Vorschlag offen"
-      : "In dieser Arbeit sind noch " + zahl + " Vorschläge offen") +
-      (daten.seiten.length > 1 ? ", davon " + hier + " auf dieser Seite" : "") + ". " +
-      (zahl === 1 ? "Diesen Vorschlag" : "Alle " + zahl + " Vorschläge") +
-      " ungeprüft als bestätigt übernehmen?";
-    $("rest-ja").textContent = zahl === 1 ? "1 Vorschlag bestätigen" : "Alle " + zahl + " bestätigen";
-    fragen($("rest-dialog"), restBestaetigen);
+    if (gesperrt) { return; }
+    frischFragen(function (antwort) {
+      var stand = antwort.arbeit;
+      var zahl = stand.offen;
+      var hier = 0;
+      var unfertig = false;
+      stand.seiten.forEach(function (s) {
+        if (s.id === seite.id) { hier = s.offen; }
+        unfertig = unfertig || s.status !== "fertig";
+      });
+      if (unfertig) {
+        melden((stand.grund ? stand.grund + " " : "") +
+          "Bis alle Seiten fertig analysiert sind, wird nichts gesammelt bestätigt.", "hinweis");
+        return;
+      }
+      if (!zahl) {
+        melden("In dieser Arbeit ist kein Vorschlag mehr offen.", "hinweis");
+        return;
+      }
+      $("rest-text").textContent = (zahl === 1
+        ? "In dieser Arbeit ist noch 1 Vorschlag offen"
+        : "In dieser Arbeit sind noch " + zahl + " Vorschläge offen") +
+        (stand.seiten.length > 1 ? ", davon " + hier + " auf dieser Seite" : "") + ". " +
+        (zahl === 1 ? "Diesen Vorschlag" : "Alle " + zahl + " Vorschläge") +
+        " ungeprüft als bestätigt übernehmen?";
+      $("rest-ja").textContent = zahl === 1 ? "1 Vorschlag bestätigen" : "Alle " + zahl + " bestätigen";
+      fragen($("rest-dialog"), function () { restBestaetigen(stand.stand); });
+    });
   });
 
   function offeneAufDerSeite() {
     return Object.keys(zeichen).filter(function (id) { return zeichen[id].status === "offen"; }).length;
   }
 
-  function restBestaetigen() {
-    var nummer = ++folge;
-    var knopf = $("rest-knopf");
-    knopf.disabled = true;
-    senden("POST", "/arbeit/" + arbeit.id + "/rest-bestaetigen").then(function (antwort) {
+  // `stand` ist der Stand der Arbeit, den der Dialog gezeigt hat.
+  function restBestaetigen(stand) {
+    fragt = true;
+    fussleisteZeigen();
+    schreiben("/arbeit/" + arbeit.id + "/rest-bestaetigen", { stand: stand }).then(function (antwort) {
+      fragt = false;
       (antwort.geaendert || []).forEach(function (id) {
         if (zeichen[id] && !unterwegs[id]) {
           zeichen[id].status = "bestaetigt";
           zeichen[id].bestaetigt_wie = "gesammelt";
         }
       });
-      daten.seiten.forEach(function (s) { s.offen = 0; });
-      arbeitStellen(antwort.arbeit, nummer);
+      arbeitStellen(antwort.arbeit);
       allesZeichnen();
-      arbeitDurch();
-    }, function (fehler) {
       fussleisteZeigen();
-      melden(fehlertext(fehler));
+      sprungFaellig = true;  // nach dem Nachladen: zur Gesamtbestätigung
+    }, function (fehler) {
+      fragt = false;
+      fussleisteZeigen();
+      melden(fehlertext(fehler));  // den aktuellen Stand lädt die Ansicht gleich nach
     });
   }
 
-  var gezeigteZahlen = null;
-
   $("gesamt-knopf").addEventListener("click", function () {
-    var knopf = this;
-    var nummer = ++folge;
-    knopf.disabled = true;
-    senden("GET", "/arbeit/" + arbeit.id + "/zahlen").then(function (antwort) {
-      arbeitStellen(antwort.arbeit, nummer);
-      fussleisteZeigen();
+    frischFragen(function (antwort) {
+      if (antwort.arbeit.bestaetigt_am) { return; }  // inzwischen anderswo bestätigt
       if (!antwort.bestaetigbar) {
         melden(antwort.grund || "Die Arbeit lässt sich noch nicht bestätigen.", "hinweis");
         return;
       }
-      gezeigteZahlen = antwort.zahlen;
       ["einzeln", "gesammelt", "geaendert", "verworfen", "hand"].forEach(function (feld) {
         $("zahl-" + feld).textContent = antwort.zahlen[feld];
       });
-      fragen($("gesamt-dialog"), gesamtBestaetigen);
-    }, function (fehler) {
-      fussleisteZeigen();
-      melden(fehlertext(fehler));
+      fragen($("gesamt-dialog"), function () { gesamtBestaetigen(antwort.arbeit.stand); });
     });
   });
 
-  function gesamtBestaetigen() {
-    var nummer = ++folge;
-    $("gesamt-knopf").disabled = true;
-    senden("POST", "/arbeit/" + arbeit.id + "/bestaetigen", { zahlen: gezeigteZahlen })
-      .then(function (antwort) {
-        arbeitStellen(antwort.arbeit, nummer);
-        var weiter = $("arbeit-weiter");
-        if (weiter) { weiter.focus(); }
-      }, function (fehler) {
-        fussleisteZeigen();
-        melden(fehlertext(fehler));
-      });
+  // `stand` ist der Stand der Arbeit, zu dem der Dialog die Zahlen gezeigt hat.
+  function gesamtBestaetigen(stand) {
+    fragt = true;
+    fussleisteZeigen();
+    schreiben("/arbeit/" + arbeit.id + "/bestaetigen", { stand: stand }).then(function (antwort) {
+      fragt = false;
+      arbeitStellen(antwort.arbeit);
+      fussleisteZeigen();
+      var weiter = $("arbeit-weiter");
+      if (weiter && arbeit.bestaetigt_am) { weiter.focus(); }
+    }, function (fehler) {
+      fragt = false;
+      fussleisteZeigen();
+      melden(fehlertext(fehler));  // den aktuellen Stand lädt die Ansicht gleich nach
+    });
   }
 
   $("neu-analyse-knopf").addEventListener("click", function () {
     fragen($("neu-analyse-dialog"), function () {
       var knopf = $("neu-analyse-knopf");
       knopf.disabled = true;
-      senden("POST", "/seite/" + seite.id + "/neu-analysieren").then(function () {
+      schreiben("/seite/" + seite.id + "/neu-analysieren").then(function () {
         window.location.reload();  // die Seite zeigt dann den Lauf und wartet auf sein Ende
       }, function (fehler) {
         fussleisteZeigen();
@@ -1053,25 +1281,6 @@
       });
     });
   });
-
-  // Solange die Analyse dieser Seite wartet oder läuft: den Stand abfragen, danach neu laden.
-  function aufAnalyseWarten() {
-    window.setTimeout(function () {
-      senden("GET", daten.url_stand).then(function (stand) {
-        var status = null;
-        (stand.arbeiten || []).forEach(function (a) {
-          (a.seiten || []).forEach(function (s) {
-            if (s.id === seite.id) { status = s.status; }
-          });
-        });
-        if (status === "wartet" || status === "laeuft") {
-          aufAnalyseWarten();
-        } else {
-          window.location.reload();
-        }
-      }, aufAnalyseWarten);
-    }, 2000);
-  }
 
   // --- Kürzel der Arbeit ---------------------------------------------------------------------
 
@@ -1171,6 +1380,26 @@
     var taste = ereignis.key.length === 1 ? ereignis.key.toLowerCase() : ereignis.key;
     var verbraucht = true;
 
+    // Solange ein Rahmen gezogen oder aufgezogen wird, ruhen die Tasten; Esc bricht ab.
+    if (zug !== null || aufzug !== null) {
+      ereignis.preventDefault();
+      if (taste === "Escape") {
+        zugAbbrechen();
+        if (aufzug !== null) { abbrechen(); }
+      }
+      return;
+    }
+    // Eine gehaltene Taste entscheidet nicht Zeichen um Zeichen weiter.
+    var aktion = taste === "b" || taste === "v" || taste === "Delete" || taste === "z" ||
+      taste === "e" || taste === "s" || (taste === "Enter" && aufZeichen);
+    if (aktion && ereignis.repeat) {
+      ereignis.preventDefault();
+      return;
+    }
+    // Die Tasten wirken auf das Zeichen, auf dem der Fokus steht; es ist dann auch das gewählte.
+    var imFokus = zeichenVon(ziel);
+    if (imFokus !== null && imFokus !== gewaehlt && zeichen[imFokus]) { waehlen(imFokus, "liste"); }
+
     if (taste === "n") {
       zumNaechstenOffenen();
     } else if (taste === "Tab") {
@@ -1205,10 +1434,12 @@
 
   allesZeichnen();
   arbeitZeigen();
-  if (gesperrt) {
-    aufAnalyseWarten();
-  } else {
+  if (!gesperrt) {
     var erster = naechsterOffener(null);
     if (erster !== null) { waehlen(erster, "taste"); }
   }
+  // Wartet oder läuft eine Seite der Arbeit, fragt die Ansicht nach, bis alle fertig sind. Ist
+  // es diese Seite, lädt die Ansicht danach neu und zeigt die neuen Vorschläge.
+  abfragePlanen();
+  notizZeigen();
 })();

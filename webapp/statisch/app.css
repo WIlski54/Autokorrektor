@@ -400,6 +400,8 @@ kbd {
 .zeichenformular[hidden] { display: none; }
 .zeichenformular .eintrag-knoepfe { padding: 0; }
 .zeichenformular p { margin: 0; font-size: .82rem; }
+.zeichenformular .formularfehler { color: var(--gefahr); font-weight: 600; }
+.zeichenformular .formularfehler[hidden] { display: none; }
 .zeichenformular.neu {
   margin-bottom: .75rem; padding: .7rem;
   border: 1px solid var(--kat-hand); border-left-width: 4px; border-radius: 6px; background: #f1f8f7;
