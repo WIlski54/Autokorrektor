@@ -15,6 +15,7 @@ from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from webapp.regeln import RegelFehler
+from webapp.uebersicht import kategorien_ordnen
 
 # Die Farben je Kategorie, passend zur Korrekturansicht (`--kat-R`, `--kat-Z`, `--kat-Gr` in
 # app.css). Eigene Kürzel tragen das Petrol der selbst gesetzten Zeichen.
@@ -24,8 +25,6 @@ WEISS = (255, 255, 255)
 DUNKEL = (31, 35, 40)        # Kopf, Zahlen
 GRAU = (78, 84, 92)          # Vorschlag, Bezeichnungen
 LINIE = (176, 176, 170)      # Trennlinie, Kasten
-
-FESTE_KATEGORIEN = (("R", "Rechtschreibung"), ("Z", "Zeichensetzung"), ("Gr", "Grammatik"))
 
 MAX_KANTE = 2400             # Pixel; längere Seiten werden für das PDF verkleinert
 JPEG_QUALITAET = 85
@@ -361,13 +360,7 @@ def fehleruebersicht(seiten, eigene):
     """
     zahl = Counter(z["kategorie"] for seite in seiten for z in seite["zeichen"]
                    if z["status"] == "bestaetigt")
-    namen = dict(FESTE_KATEGORIEN)
-    fest = [kuerzel for kuerzel in namen if zahl[kuerzel]]
-    namen = {**{e["kuerzel"]: e["bezeichnung"] for e in eigene}, **namen}
-    uebrige = sorted((kuerzel for kuerzel in zahl if kuerzel not in fest),
-                     key=lambda kuerzel: (kuerzel.casefold(), kuerzel))
-    return [{"kuerzel": kuerzel, "bezeichnung": namen.get(kuerzel, ""), "anzahl": zahl[kuerzel]}
-            for kuerzel in fest + uebrige]
+    return kategorien_ordnen(zahl, eigene)
 
 
 def _fotobreite(breite, hoehe, vorschlag_zeigen, uebersicht):
