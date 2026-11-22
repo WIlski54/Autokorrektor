@@ -120,6 +120,27 @@ def test_bild_ablegen_speichert_jpeg_mit_groesse(speicher):
         assert img.format == "JPEG" and img.size == (60, 40)
 
 
+def test_ablage_eintrag_liefert_einen_eintrag_oder_none(speicher):
+    nr = _aufgabe(speicher)
+    ablage_id = speicher.bild_ablegen(nr, "foto.jpg", _bild((60, 40)))
+    eintrag = speicher.ablage_eintrag(ablage_id)
+    assert eintrag == speicher.ablage(nr)[0]
+    assert eintrag["neue_arbeit"] is True and eintrag["aufgabe_id"] == nr
+    assert speicher.ablage_eintrag(999) is None
+
+
+def test_bilddaten_liefert_original_oder_vorschau(speicher):
+    nr = _aufgabe(speicher)
+    eintrag = speicher.ablage_eintrag(speicher.bild_ablegen(nr, "foto.jpg", _bild((800, 400))))
+    pfad = speicher.bildpfad(eintrag["bilddatei"])
+    assert speicher.bilddaten(eintrag["bilddatei"]) == pfad.read_bytes()
+    with Image.open(io.BytesIO(speicher.bilddaten(eintrag["bilddatei"], breite=200))) as img:
+        assert img.format == "JPEG" and img.size == (200, 100)
+    # nie größer als das Original
+    assert speicher.bilddaten(eintrag["bilddatei"], breite=5000) == pfad.read_bytes()
+    assert speicher.bilddaten("fehlt.jpg") is None
+
+
 def test_bild_ablegen_nimmt_webp_und_vergibt_eindeutige_namen(speicher):
     nr = _aufgabe(speicher)
     speicher.bild_ablegen(nr, "gleich.jpg", _bild())

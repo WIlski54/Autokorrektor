@@ -226,3 +226,218 @@ def test_verfahren_zuordnung(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "z")
     assert "einstellungen.toml" in verfahren.hindernis("claude", EINST)
     assert verfahren.hindernis("unbekannt", EINST)
+
+
+# --- Task 8: Hochladen und Zuordnen -------------------------------------------------------
+
+def _hochladen(client, nr, *dateien):
+    return client.post(f"/aufgabe/{nr}/ablage", content_type="multipart/form-data",
+                       data={"fotos": [(io.BytesIO(daten), name) for name, daten in dateien]})
+
+
+def _ablage_fuellen(speicher, nr, zahl=3):
+    return [speicher.bild_ablegen(nr, f"{i}.jpg", _bild()) for i in range(zahl)]
+
+
+def test_hochladen_nimmt_bilder_an_und_nennt_abgelehnte(client, speicher):
+    nr = _aufgabe(speicher)
+    antwort = _hochladen(client, nr, ("a.jpg", _bild()), ("notiz.txt", b"kein Bild"),
+                         ("b.png", _bild((300, 200), "PNG")))
+    assert antwort.status_code == 200
+    erg = antwort.get_json()
+    ablage = speicher.ablage(nr)
+    assert [e["dateiname"] for e in erg["angenommen"]] == ["a.jpg", "b.png"]
+    assert [e["id"] for e in erg["angenommen"]] == [e["id"] for e in ablage]
+    assert erg["angenommen"][1]["breite"] == 300 and erg["angenommen"][1]["hoehe"] == 200
+    assert [e["dateiname"] for e in erg["abgelehnt"]] == ["notiz.txt"]
+    assert erg["abgelehnt"][0]["grund"]
+
+
+def test_hochladen_lehnt_zu_grosse_datei_mit_namen_ab(app, client, speicher):
+    nr = _aufgabe(speicher)
+    app.config["MAX_DATEI"] = 2000
+    gross = _bild((2000, 1500))
+    assert len(gross) > 2000
+    erg = _hochladen(client, nr, ("riesig.jpg", gross), ("klein.jpg", _bild((20, 20)))).get_json()
+    assert [e["dateiname"] for e in erg["angenommen"]] == ["klein.jpg"]
+    assert erg["abgelehnt"][0]["dateiname"] == "riesig.jpg"
+    assert "groß" in erg["abgelehnt"][0]["grund"]
+    assert len(speicher.ablage(nr)) == 1
+
+
+def test_hochladen_zu_unbekannter_aufgabe_ergibt_404(client):
+    assert _hochladen(client, 999, ("a.jpg", _bild())).status_code == 404
+
+
+def test_hochladen_ohne_dateien_ergibt_400(client, speicher):
+    nr = _aufgabe(speicher)
+    assert client.post(f"/aufgabe/{nr}/ablage", data={}).status_code == 400
+
+
+def test_ordnen_speichert_reihenfolge_trennmarken_und_entfernt(client, speicher):
+    nr = _aufgabe(speicher)
+    a, b, c = _ablage_fuellen(speicher, nr)
+    antwort = client.post(f"/aufgabe/{nr}/ablage/ordnen", json={"eintraege": [
+        {"id": c, "neue_arbeit": True}, {"id": a, "neue_arbeit": False}]})
+    assert antwort.status_code == 200
+    assert antwort.get_json() == {"ok": True, "fotos": 2, "arbeiten": 1}
+    ablage = speicher.ablage(nr)
+    assert [(e["id"], e["neue_arbeit"]) for e in ablage] == [(c, True), (a, False)]
+    assert len(list(speicher.bilder.iterdir())) == 2
+
+
+@pytest.mark.parametrize("inhalt", [
+    {}, {"eintraege": "x"}, {"eintraege": [{"neue_arbeit": True}]}, {"eintraege": [{"id": "1"}]},
+    {"eintraege": [3]}, [1, 2]])
+def test_ordnen_lehnt_unbrauchbare_angaben_ab(client, speicher, inhalt):
+    nr = _aufgabe(speicher)
+    _ablage_fuellen(speicher, nr)
+    assert client.post(f"/aufgabe/{nr}/ablage/ordnen", json=inhalt).status_code == 400
+    assert len(speicher.ablage(nr)) == 3
+
+
+def test_ordnen_lehnt_fremde_und_doppelte_eintraege_ab(client, speicher):
+    nr, andere = _aufgabe(speicher), _aufgabe(speicher)
+    (a, b) = _ablage_fuellen(speicher, nr, 2)
+    (fremd,) = _ablage_fuellen(speicher, andere, 1)
+    for eintraege in ([{"id": a}, {"id": fremd}], [{"id": a}, {"id": a}]):
+        antwort = client.post(f"/aufgabe/{nr}/ablage/ordnen", json={"eintraege": eintraege})
+        assert antwort.status_code == 400
+    assert len(speicher.ablage(nr)) == 2 and len(speicher.ablage(andere)) == 1
+
+
+def _groesse(antwort):
+    with Image.open(io.BytesIO(antwort.data)) as img:
+        return img.format, img.size
+
+
+def test_bildrouten_liefern_jpeg_und_vorschaubild(client, speicher):
+    nr = _aufgabe(speicher)
+    ablage_id = speicher.bild_ablegen(nr, "a.jpg", _bild((600, 400)))
+    (seite_id,) = speicher.arbeit_anlegen(nr, [("b.jpg", _bild((500, 700)))])
+    for pfad, groesse, klein in ((f"/bild/ablage/{ablage_id}", (600, 400), (300, 200)),
+                                 (f"/bild/seite/{seite_id}", (500, 700), (300, 420))):
+        antwort = client.get(pfad)
+        assert antwort.status_code == 200 and antwort.mimetype == "image/jpeg"
+        assert _groesse(antwort) == ("JPEG", groesse)
+        vorschau = client.get(pfad + "?b=300")
+        assert vorschau.status_code == 200 and vorschau.mimetype == "image/jpeg"
+        assert _groesse(vorschau) == ("JPEG", klein)
+        assert vorschau.headers["ETag"] != antwort.headers["ETag"]
+        erneut = client.get(pfad + "?b=300", headers={"If-None-Match": vorschau.headers["ETag"]})
+        assert erneut.status_code == 304 and erneut.data == b""
+
+
+@pytest.mark.parametrize("pfad", ["/bild/seite/999", "/bild/ablage/999", "/bild/ablage/999?b=300"])
+def test_bildrouten_unbekannte_nummer_ergibt_404(client, pfad):
+    assert client.get(pfad).status_code == 404
+
+
+def test_bildroute_begrenzt_unsinnige_breite(client, speicher):
+    nr = _aufgabe(speicher)
+    ablage_id = speicher.bild_ablegen(nr, "a.jpg", _bild((600, 400)))
+    assert _groesse(client.get(f"/bild/ablage/{ablage_id}?b=1"))[1] == (40, 27)
+    assert _groesse(client.get(f"/bild/ablage/{ablage_id}?b=abc"))[1] == (600, 400)
+
+
+def test_hochladeseite_zeigt_ablage_als_daten(client, speicher):
+    nr = _aufgabe(speicher)
+    a, b = _ablage_fuellen(speicher, nr, 2)
+    speicher.ablage_ordnen(nr, [{"id": a, "neue_arbeit": True}, {"id": b, "neue_arbeit": False}])
+    speicher.arbeit_anlegen(nr, [("x.jpg", _bild())])
+    antwort = client.get(f"/aufgabe/{nr}/hochladen")
+    text = _text(antwort)
+    assert antwort.status_code == 200 and "Analyse starten" in text
+    anfang = text.index('<script type="application/json" id="zuordnen-daten">')
+    daten = json.loads(text[text.index(">", anfang) + 1:text.index("</script>", anfang)])
+    assert [(e["id"], e["neue_arbeit"]) for e in daten["eintraege"]] == [(a, True), (b, False)]
+    assert daten["naechste_nummer"] == 2 and daten["max_datei"] == 25 * 1024 * 1024
+
+
+def test_hochladeseite_meldet_fehlenden_schluessel_vorab(client, speicher):
+    nr = _aufgabe(speicher, verfahren="gpt")
+    assert "OPENAI_API_KEY" in _text(client.get(f"/aufgabe/{nr}/hochladen"))
+
+
+def test_analyse_starten_bildet_arbeiten_und_reiht_alle_seiten_ein(client, speicher, schlange,
+                                                                    schein):
+    nr = _aufgabe(speicher)
+    a, b, c = _ablage_fuellen(speicher, nr)
+    speicher.ablage_ordnen(nr, [{"id": a, "neue_arbeit": True}, {"id": b, "neue_arbeit": False},
+                                {"id": c, "neue_arbeit": True}])
+    antwort = client.post(f"/aufgabe/{nr}/analyse-starten")
+    assert antwort.status_code == 302 and antwort.headers["Location"].endswith(f"/aufgabe/{nr}")
+    assert schlange.warten(5) is True
+    arbeiten = speicher.arbeiten(nr)
+    assert [(ar["kuerzel"], len(ar["seiten"])) for ar in arbeiten] == [("01", 2), ("02", 1)]
+    seiten = [s["id"] for ar in arbeiten for s in ar["seiten"]]
+    assert sorted(schein.aufrufe) == sorted(seiten)
+    assert {ar["status_gesamt"] for ar in arbeiten} == {"fertig"}
+    assert speicher.ablage(nr) == []
+
+
+@pytest.mark.parametrize("verfahren, schluessel, erwartet", [
+    ("claude", None, "ANTHROPIC_API_KEY"),
+    ("claude", "ANTHROPIC_API_KEY", "einstellungen.toml"),
+    ("gemini_vision", None, "GOOGLE_VISION_API_KEY"),
+])
+def test_analyse_starten_ohne_schluessel_oder_modell_reiht_nichts_ein(
+        client, speicher, schlange, schein, monkeypatch, verfahren, schluessel, erwartet):
+    if schluessel:
+        monkeypatch.setenv(schluessel, "vorhanden")
+    nr = _aufgabe(speicher, verfahren=verfahren)
+    _ablage_fuellen(speicher, nr)
+    antwort = client.post(f"/aufgabe/{nr}/analyse-starten", follow_redirects=True)
+    text = _text(antwort)
+    assert antwort.status_code == 200 and antwort.request.path == f"/aufgabe/{nr}/hochladen"
+    assert erwartet in text and 'class="meldung fehler"' in text
+    assert schlange.warten(1) is True and schein.aufrufe == []
+    assert speicher.arbeiten(nr) == [] and len(speicher.ablage(nr)) == 3
+
+
+def test_analyse_starten_ohne_fotos_meldet_das(client, speicher, schein):
+    nr = _aufgabe(speicher)
+    antwort = client.post(f"/aufgabe/{nr}/analyse-starten", follow_redirects=True)
+    assert antwort.request.path == f"/aufgabe/{nr}/hochladen"
+    assert "keine Fotos" in _text(antwort) and schein.aufrufe == []
+
+
+def _arbeit_hinzufuegen(client, nr, *dateien, **zusatz):
+    return client.post(f"/aufgabe/{nr}/arbeit", content_type="multipart/form-data",
+                       data={"fotos": [(io.BytesIO(daten), name) for name, daten in dateien]},
+                       **zusatz)
+
+
+def test_arbeit_hinzufuegen_legt_eine_arbeit_mit_zwei_seiten_an(client, speicher, schlange,
+                                                                 schein):
+    nr = _aufgabe(speicher)
+    antwort = _arbeit_hinzufuegen(client, nr, ("1.jpg", _bild()), ("2.jpg", _bild()))
+    assert antwort.status_code == 302 and antwort.headers["Location"].endswith(f"/aufgabe/{nr}")
+    assert schlange.warten(5) is True
+    (arbeit,) = speicher.arbeiten(nr)
+    assert arbeit["kuerzel"] == "01" and [s["nummer"] for s in arbeit["seiten"]] == [1, 2]
+    assert sorted(schein.aufrufe) == [s["id"] for s in arbeit["seiten"]]
+    assert arbeit["status_gesamt"] == "fertig"
+
+
+def test_arbeit_hinzufuegen_mit_unlesbarer_datei_legt_nichts_an(client, speicher, schein):
+    nr = _aufgabe(speicher)
+    antwort = _arbeit_hinzufuegen(client, nr, ("1.jpg", _bild()), ("<notiz>.txt", b"nichts"),
+                                  follow_redirects=True)
+    text = _text(antwort)
+    assert "&lt;notiz&gt;.txt" in text and "<notiz>" not in text
+    assert speicher.arbeiten(nr) == [] and schein.aufrufe == []
+    assert list(speicher.bilder.iterdir()) == []
+
+
+def test_arbeit_hinzufuegen_ohne_dateien_meldet_das(client, speicher):
+    nr = _aufgabe(speicher)
+    antwort = client.post(f"/aufgabe/{nr}/arbeit", data={}, follow_redirects=True)
+    assert "kein Foto" in _text(antwort) and speicher.arbeiten(nr) == []
+
+
+def test_arbeit_hinzufuegen_ohne_schluessel_legt_nichts_an(client, speicher, schein):
+    nr = _aufgabe(speicher, verfahren="gpt")
+    antwort = _arbeit_hinzufuegen(client, nr, ("1.jpg", _bild()), follow_redirects=True)
+    assert "OPENAI_API_KEY" in _text(antwort)
+    assert speicher.arbeiten(nr) == [] and schein.aufrufe == []

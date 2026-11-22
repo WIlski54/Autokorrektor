@@ -5,5 +5,60 @@
 <li aria-current="page">Fotos hochladen</li>
 {% endblock %}
 {% block inhalt %}
-<h1>Fotos hochladen und zuordnen</h1>
+<div class="titelzeile">
+  <div>
+    <h1>Fotos hochladen und zuordnen</h1>
+    <p class="leise unterzeile">{{ aufgabe.titel }} · {{ aufgabe.fach }}, Jahrgang {{ aufgabe.jahrgang }} · {{ anzeigename(aufgabe.verfahren) }}</p>
+  </div>
+  {% if zahl_arbeiten %}
+  <a class="knopf" href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">Zum Stapel ({{ zahl_arbeiten }} {{ 'Arbeit' if zahl_arbeiten == 1 else 'Arbeiten' }})</a>
+  {% endif %}
+</div>
+
+{% if hindernis %}
+<p class="meldung fehler" role="alert">{{ hindernis }}</p>
+{% endif %}
+
+<section id="ablegefeld" class="ablegefeld" aria-label="Fotos hochladen">
+  <p><strong>Fotos hierher ziehen</strong> oder</p>
+  <p>
+    <label class="knopf" for="dateien">Dateien auswählen</label>
+    <input id="dateien" class="nur-vorlesen" type="file" multiple accept="image/jpeg,image/png,image/webp">
+  </p>
+  <p class="leise">JPG, PNG oder WebP. Die Fotos werden nach Dateinamen sortiert angehängt und aufrecht gedreht gespeichert.</p>
+  <p id="fortschritt" class="fortschritt" role="status" hidden></p>
+</section>
+
+<div id="abgelehnt" class="meldung fehler" role="alert" hidden>
+  <p>Diese Dateien wurden nicht angenommen:</p>
+  <ul></ul>
+</div>
+<p id="speicherfehler" class="meldung fehler" role="alert" hidden>
+  Die Zuordnung konnte nicht gespeichert werden. Bitte die Seite neu laden und es erneut versuchen.
+</p>
+
+<section aria-labelledby="zuordnung-titel">
+  <h2 id="zuordnung-titel">Zuordnung zu Arbeiten</h2>
+  <p class="leise">
+    Zwischen je zwei Fotos steht eine Trennmarke. „getrennt“ heißt: Hier beginnt eine neue Arbeit.
+    Ein Klick verbindet die Fotos zu einer mehrseitigen Arbeit oder trennt sie wieder.
+    Fotos lassen sich ziehen oder mit den Pfeilen verschieben.
+  </p>
+  <div id="reihe" class="reihe"></div>
+  <p id="leerhinweis" class="leer">Noch keine Fotos in der Ablage.</p>
+</section>
+
+<form id="startformular" class="fussleiste" method="post"
+      action="{{ url_for('seiten.analyse_starten', aufgabe_id=aufgabe.id) }}">
+  <div>
+    <strong id="zusammenfassung" role="status">0 Fotos in 0 Arbeiten</strong>
+    <span id="speicherstand" class="leise" role="status"></span>
+  </div>
+  <button id="start" class="knopf haupt" type="submit" disabled>Analyse starten</button>
+</form>
+<noscript><p class="meldung fehler">Diese Seite braucht JavaScript.</p></noscript>
+{% endblock %}
+{% block skripte %}
+<script type="application/json" id="zuordnen-daten">{{ daten|tojson }}</script>
+<script src="{{ url_for('static', filename='zuordnen.js') }}"></script>
 {% endblock %}

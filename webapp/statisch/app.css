@@ -170,6 +170,70 @@ progress { height: .5rem; accent-color: var(--akzent); }
 .schalter.kat-Z b { color: var(--kat-Z); }
 .schalter.kat-Gr b { color: var(--kat-Gr); }
 
+/* --- Hochladen und Zuordnen --- */
+
+.ablegefeld {
+  padding: 1.75rem 1rem; text-align: center;
+  border: 2px dashed #b9b9b1; border-radius: var(--rund); background: var(--flaeche);
+  transition: background .15s, border-color .15s;
+}
+.ablegefeld p { margin: .35rem 0; }
+.ablegefeld.bereit { border-color: var(--akzent); background: var(--akzent-hell); }
+.ablegefeld input:focus-visible + label, .ablegefeld label:focus-within { outline: 3px solid #f0a500; }
+.fortschritt { font-weight: 600; color: var(--akzent-dunkel); }
+
+.reihe { display: flex; flex-wrap: wrap; align-items: stretch; gap: .75rem .25rem; margin-top: 1rem; }
+.gruppe {
+  padding: .6rem; background: var(--flaeche);
+  border: 1px solid var(--linie); border-radius: var(--rund); box-shadow: var(--schatten);
+}
+.gruppenkopf { margin-bottom: .5rem; font-size: .85rem; font-weight: 600; color: var(--leise);
+  font-variant-numeric: tabular-nums; }
+.gruppenfotos { display: flex; align-items: stretch; }
+
+.karte {
+  position: relative; display: flex; flex-direction: column; width: 8.5rem;
+  border: 1px solid var(--linie); border-radius: 6px; background: #fafaf8; cursor: grab;
+}
+.karte img { display: block; width: 100%; height: 10.5rem; object-fit: contain;
+  background: #eeeeea; border-radius: 5px 5px 0 0; }
+.karte.gezogen { opacity: .4; }
+.karte.ziel-davor { box-shadow: -4px 0 0 var(--akzent); }
+.karte.ziel-dahinter { box-shadow: 4px 0 0 var(--akzent); }
+.kartenleiste { display: flex; align-items: center; gap: .15rem; padding: .2rem; }
+.seitenangabe { flex: 1; text-align: center; font-size: .8rem; color: var(--leise); }
+.griff {
+  width: 1.75rem; height: 1.75rem; padding: 0;
+  border: 1px solid transparent; border-radius: 4px; background: none;
+  color: var(--leise); font: inherit; line-height: 1; cursor: pointer;
+}
+.griff:hover:not(:disabled) { background: #ecece7; color: var(--text); }
+.griff:disabled { opacity: .3; cursor: default; }
+.griff.weg:hover { background: var(--gefahr-hell); color: var(--gefahr); }
+
+.trennmarke {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .3rem;
+  padding: 0 .2rem; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: .7rem; color: var(--leise);
+}
+.trennmarke .strich { flex: 1; width: 0; border-left: 2px solid #c9c9c2; }
+.trennmarke .wort { writing-mode: vertical-rl; letter-spacing: .04em; }
+.trennmarke.aktiv { min-width: 2.75rem; color: var(--akzent-dunkel); }
+.trennmarke.aktiv .strich { border-left: 2px dashed var(--akzent); }
+.trennmarke:not(.aktiv) { width: 1.5rem; }
+.trennmarke:not(.aktiv) .strich { flex: 0 0 1rem; border-left-style: solid; }
+.trennmarke:hover { color: var(--text); }
+.trennmarke:hover .strich { border-left-color: var(--text); }
+
+.fussleiste {
+  position: sticky; bottom: 0; z-index: 5;
+  display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;
+  margin-top: 2rem; padding: .9rem 1.1rem;
+  background: var(--flaeche); border: 1px solid var(--linie); border-radius: var(--rund);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, .06);
+}
+.fussleiste .leise { margin-left: .75rem; }
+
 @media (max-width: 640px) {
   .seitenkopf { padding: .75rem 1rem; }
   .inhalt { padding: 1.25rem 1rem; }

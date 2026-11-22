@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from PIL import Image
+
 from korrektor import bild
 
 SCHEMA = """
@@ -238,6 +240,23 @@ class Speicher:
         self.bildpfad(bilddatei).write_bytes(inhalt)
         return bilddatei, img.width, img.height
 
+    def bilddaten(self, bilddatei, breite=None):
+        """JPEG-Bytes eines gespeicherten Fotos, mit `breite` als verkleinertes Vorschaubild.
+
+        None, wenn die Datei fehlt. Das Vorschaubild wird nie größer als das Original.
+        """
+        pfad = self.bildpfad(bilddatei)
+        if not pfad.is_file():
+            return None
+        if breite is not None:
+            with Image.open(pfad) as img:
+                if breite < img.width:
+                    hoehe = max(1, round(img.height * breite / img.width))
+                    img.draft("RGB", (breite, hoehe))  # JPEG schon beim Lesen verkleinern
+                    return bild.als_jpeg(img.convert("RGB").resize((breite, hoehe)),
+                                         qualitaet=85)
+        return pfad.read_bytes()
+
     def _dateien_loeschen(self, dateien):
         for bilddatei in dateien:
             try:
@@ -271,6 +290,12 @@ class Speicher:
             zeilen = db.execute("SELECT * FROM ablage WHERE aufgabe_id = ?"
                                 " ORDER BY reihenfolge, id", (aufgabe_id,)).fetchall()
         return [{**dict(zeile), "neue_arbeit": bool(zeile["neue_arbeit"])} for zeile in zeilen]
+
+    def ablage_eintrag(self, id):
+        """Ein einzelnes Foto der Ablage; None, wenn es das nicht (mehr) gibt."""
+        with self._verbindung() as db:
+            zeile = db.execute("SELECT * FROM ablage WHERE id = ?", (id,)).fetchone()
+        return {**dict(zeile), "neue_arbeit": bool(zeile["neue_arbeit"])} if zeile else None
 
     def ablage_ordnen(self, aufgabe_id, eintraege):
         """Speichert Reihenfolge und Trennmarken; nicht genannte Fotos werden gelöscht."""
