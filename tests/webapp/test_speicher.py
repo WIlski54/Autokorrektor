@@ -590,3 +590,271 @@ def test_gleichzeitiges_schreiben_aus_mehreren_threads(speicher):
         list(gleichzeitig.map(schreiben, seiten))
     assert speicher.seiten_unfertig() == []
     assert all(len(_zeichen_der_seite(speicher, s)) == 2 for s in seiten)
+
+
+# --- Etappe 2: Schreibwege für Zeichen, Bestätigung, Kürzel ---------------------------------
+
+def _fertige_arbeit(speicher, *zeichen, seitenzahl=1):
+    """Eine Arbeit mit fertigen Seiten; die Zeichen stehen auf der ersten Seite.
+
+    Gibt (arbeit_id, seiten_ids, zeichen_ids) zurück.
+    """
+    _, seiten = _seiten(speicher, seitenzahl)
+    for seite_id in seiten:
+        lauf = speicher.seite_lauf_beginnen(seite_id)
+        speicher.zeichen_ersetzen(seite_id, lauf, list(zeichen) if seite_id == seiten[0] else [])
+        speicher.seite_status(seite_id, "fertig", lauf=lauf)
+    arbeit_id = speicher.seite(seiten[0])["arbeit_id"]
+    return arbeit_id, seiten, [z["id"] for z in _zeichen_der_seite(speicher, seiten[0])]
+
+
+def _bestaetigte_arbeit(speicher, *zeichen):
+    arbeit_id, seiten, ids = _fertige_arbeit(speicher, *zeichen)
+    assert speicher.arbeit_bestaetigen(arbeit_id) is not None
+    assert speicher.arbeit(arbeit_id)["bestaetigt_am"]
+    return arbeit_id, seiten, ids
+
+
+def _ist_bestaetigt(speicher, arbeit_id):
+    arbeit = speicher.arbeit(arbeit_id)
+    assert (arbeit["bestaetigt_am"] is None) == (arbeit["bestaetigung"] is None)
+    return arbeit["bestaetigt_am"] is not None
+
+
+FEST = {"status": "bestaetigt", "bestaetigt_wie": "einzeln"}
+
+
+def test_zeichen_eintrag_nennt_seite_und_arbeit(speicher):
+    arbeit_id, (seite_id,), (z1,) = _fertige_arbeit(speicher, _zeichen())
+    eintrag = speicher.zeichen_eintrag(z1)
+    assert eintrag["id"] == z1 and eintrag["seite_id"] == seite_id
+    assert eintrag["arbeit_id"] == arbeit_id
+    assert eintrag["kategorie"] == "R" and eintrag["status"] == "offen"
+    assert eintrag["herkunft"] == "ki" and eintrag["bestaetigt_wie"] is None
+    assert eintrag["rahmen_ki"] == [100, 100, 80, 30]
+    assert speicher.zeichen_eintrag(999) is None
+
+
+def test_zeichen_aendern_schreibt_felder_und_hebt_die_bestaetigung_auf(speicher):
+    arbeit_id, _, (z1, z2) = _bestaetigte_arbeit(
+        speicher, _zeichen(**FEST), _zeichen(100, 300, **FEST))
+    assert speicher.zeichen_aendern(z1, kategorie="Gr", vorschlag="neu", x=5, y=6, breite=7,
+                                    hoehe=8, status="bestaetigt",
+                                    bestaetigt_wie="geaendert") is True
+    eintrag = speicher.zeichen_eintrag(z1)
+    assert (eintrag["kategorie"], eintrag["vorschlag"]) == ("Gr", "neu")
+    assert (eintrag["x"], eintrag["y"], eintrag["breite"], eintrag["hoehe"]) == (5, 6, 7, 8)
+    assert eintrag["bestaetigt_wie"] == "geaendert"
+    assert eintrag["rahmen_ki"] == [100, 100, 80, 30]  # bleibt zur Nachvollziehbarkeit
+    assert speicher.zeichen_eintrag(z2)["kategorie"] == "R"
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+
+
+def test_zeichen_aendern_ohne_felder_oder_ohne_zeichen_aendert_nichts(speicher):
+    arbeit_id, _, (z1,) = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    assert speicher.zeichen_aendern(z1) is True
+    assert speicher.zeichen_aendern(999) is False
+    assert speicher.zeichen_aendern(999, status="verworfen") is False
+    assert _ist_bestaetigt(speicher, arbeit_id) is True
+
+
+def test_zeichen_aendern_lehnt_unbekannte_felder_ab(speicher):
+    arbeit_id, _, (z1,) = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    for felder in ({"herkunft": "hand"}, {"seite_id": 1}, {"status = 'x' --": 1}):
+        with pytest.raises(ValueError):
+            speicher.zeichen_aendern(z1, **felder)
+    assert _ist_bestaetigt(speicher, arbeit_id) is True
+
+
+def test_zeichen_anlegen_legt_eigenes_zeichen_an_und_hebt_die_bestaetigung_auf(speicher):
+    arbeit_id, (seite_id,), _ = _bestaetigte_arbeit(speicher)
+    neu = speicher.zeichen_anlegen(seite_id, {
+        "kategorie": "A", "typ": "luecke", "x": 1, "y": 2, "breite": 30, "hoehe": 40,
+        "gelesen": "", "vorschlag": "treffender", "herkunft": "hand", "status": "bestaetigt",
+        "bestaetigt_wie": None})
+    eintrag = speicher.zeichen_eintrag(neu)
+    assert eintrag["seite_id"] == seite_id and eintrag["arbeit_id"] == arbeit_id
+    assert (eintrag["kategorie"], eintrag["typ"], eintrag["vorschlag"]) == (
+        "A", "luecke", "treffender")
+    assert (eintrag["herkunft"], eintrag["status"], eintrag["bestaetigt_wie"]) == (
+        "hand", "bestaetigt", None)
+    assert eintrag["rahmen_ki"] is None and eintrag["gelesen"] == ""
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+
+
+def test_zeichen_anlegen_auf_unbekannter_seite_scheitert(speicher):
+    with pytest.raises(ValueError):
+        speicher.zeichen_anlegen(999, _zeichen(herkunft="hand", status="bestaetigt"))
+
+
+def test_zeichen_loeschen_entfernt_und_hebt_die_bestaetigung_auf(speicher):
+    arbeit_id, (seite_id,), (z1, z2) = _bestaetigte_arbeit(
+        speicher, _zeichen(**FEST), _zeichen(100, 300, herkunft="hand", status="bestaetigt"))
+    assert speicher.zeichen_loeschen(z2) is True
+    assert speicher.zeichen_eintrag(z2) is None and speicher.zeichen_eintrag(z1) is not None
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+    assert speicher.zeichen_loeschen(z2) is False
+
+
+def test_zeichen_viele_setzen_in_einem_zug(speicher):
+    arbeit_id, _, (z1, z2, z3) = _fertige_arbeit(
+        speicher, _zeichen(), _zeichen(100, 300), _zeichen(100, 500, status="verworfen"))
+    fremd_id, _, (fremd,) = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    geaendert = speicher.zeichen_viele_setzen(
+        [z1, z2, z3, 999], nur_status="offen", status="bestaetigt", bestaetigt_wie="gesammelt")
+    assert geaendert == [z1, z2]
+    assert [speicher.zeichen_eintrag(z)["bestaetigt_wie"] for z in (z1, z2)] == ["gesammelt"] * 2
+    assert speicher.zeichen_eintrag(z3)["status"] == "verworfen"
+    assert speicher.zeichen_eintrag(fremd)["bestaetigt_wie"] == "einzeln"
+    assert _ist_bestaetigt(speicher, fremd_id) is True
+
+
+def test_zeichen_viele_setzen_hebt_die_bestaetigung_der_betroffenen_arbeit_auf(speicher):
+    arbeit_id, _, (z1, z2) = _bestaetigte_arbeit(
+        speicher, _zeichen(**FEST), _zeichen(100, 300, **FEST))
+    andere_id, _, _ = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    assert speicher.zeichen_viele_setzen([], status="verworfen") == []
+    assert speicher.zeichen_viele_setzen([z1], nur_status="offen", status="verworfen") == []
+    assert _ist_bestaetigt(speicher, arbeit_id) is True  # nichts geschrieben
+    assert speicher.zeichen_viele_setzen([z1, z2], status="verworfen",
+                                         bestaetigt_wie=None) == [z1, z2]
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+    assert _ist_bestaetigt(speicher, andere_id) is True
+
+
+def test_arbeit_bestaetigen_setzt_zeit_und_zahlen(speicher):
+    from datetime import datetime
+    arbeit_id, (seite_id,), _ = _fertige_arbeit(
+        speicher, _zeichen(**FEST),
+        _zeichen(100, 300, status="bestaetigt", bestaetigt_wie="gesammelt"),
+        _zeichen(100, 500, status="verworfen"),
+        _zeichen(100, 700, herkunft="hand", status="bestaetigt"))
+    erwartet = {"einzeln": 1, "gesammelt": 1, "geaendert": 0, "verworfen": 1, "hand": 1}
+    assert speicher.arbeit_bestaetigen(arbeit_id, erwartet) == erwartet
+    arbeit = speicher.arbeit(arbeit_id)
+    assert arbeit["bestaetigung"] == erwartet
+    assert datetime.fromisoformat(arbeit["bestaetigt_am"])
+    (aufgabe,) = speicher.aufgaben()
+    assert aufgabe["bestaetigt"] == 1
+    assert speicher.arbeit_bestaetigen(999) is None
+
+
+def test_arbeit_bestaetigen_scheitert_mit_offenem_zeichen_oder_unfertiger_seite(speicher):
+    from webapp.regeln import RegelFehler
+    arbeit_id, (seite_id,), (z1,) = _fertige_arbeit(speicher, _zeichen())
+    with pytest.raises(RegelFehler, match="offen"):
+        speicher.arbeit_bestaetigen(arbeit_id)
+    speicher.zeichen_aendern(z1, **FEST)
+    speicher.seite_status(seite_id, "fehlgeschlagen", fehlermeldung="x")
+    with pytest.raises(RegelFehler, match="fehlgeschlagen"):
+        speicher.arbeit_bestaetigen(arbeit_id)
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+
+
+def test_arbeit_bestaetigen_scheitert_wenn_die_genannten_zahlen_veraltet_sind(speicher):
+    from webapp.regeln import RegelFehler
+    arbeit_id, _, _ = _fertige_arbeit(speicher, _zeichen(**FEST))
+    veraltet = {"einzeln": 0, "gesammelt": 1, "geaendert": 0, "verworfen": 0, "hand": 0}
+    with pytest.raises(RegelFehler, match="geändert"):
+        speicher.arbeit_bestaetigen(arbeit_id, veraltet)
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+
+
+def test_arbeit_bestaetigung_aufheben(speicher):
+    arbeit_id, _, _ = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    speicher.arbeit_bestaetigung_aufheben(arbeit_id)
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+
+
+def test_arbeit_kuerzel_setzen_laesst_die_bestaetigung_stehen(speicher):
+    arbeit_id, _, _ = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    assert speicher.arbeit_kuerzel_setzen(arbeit_id, "  7b-03 ") is True
+    assert speicher.arbeit(arbeit_id)["kuerzel"] == "7b-03"
+    assert _ist_bestaetigt(speicher, arbeit_id) is True
+    for unzulaessig in ("", "   ", "x" * 21):
+        with pytest.raises(ValueError):
+            speicher.arbeit_kuerzel_setzen(arbeit_id, unzulaessig)
+    assert speicher.arbeit(arbeit_id)["kuerzel"] == "7b-03"
+    assert speicher.arbeit_kuerzel_setzen(999, "x") is False
+
+
+def test_zeichen_ersetzen_hebt_die_bestaetigung_auf(speicher):
+    arbeit_id, (seite_id,), _ = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    assert _ist_bestaetigt(speicher, arbeit_id) is True  # der Beginn allein schreibt nichts
+    assert speicher.zeichen_ersetzen(seite_id, lauf - 1, []) is False  # veralteter Lauf
+    assert _ist_bestaetigt(speicher, arbeit_id) is True
+    assert speicher.zeichen_ersetzen(seite_id, lauf, []) is True
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+
+
+def test_kuerzel_liefert_die_voreinstellung(speicher):
+    assert speicher.kuerzel() == [
+        {"kuerzel": "A", "bezeichnung": "Ausdruck"}, {"kuerzel": "Sb", "bezeichnung": "Satzbau"},
+        {"kuerzel": "T", "bezeichnung": "Tempus"}, {"kuerzel": "W", "bezeichnung": "Wortwahl"},
+        {"kuerzel": "I", "bezeichnung": "Inhalt"}]
+
+
+def test_kuerzel_setzen_speichert_die_neue_liste(speicher, tmp_path):
+    speicher.kuerzel()[0]["kuerzel"] = "X"  # die Voreinstellung lässt sich so nicht verändern
+    assert speicher.kuerzel()[0]["kuerzel"] == "A"
+    speicher.kuerzel_setzen([{"kuerzel": " St ", "bezeichnung": " Stil "},
+                             {"kuerzel": "A", "bezeichnung": "Ausdruck"}])
+    erwartet = [{"kuerzel": "St", "bezeichnung": "Stil"},
+                {"kuerzel": "A", "bezeichnung": "Ausdruck"}]
+    assert speicher.kuerzel() == erwartet
+    assert Speicher(tmp_path / "daten").kuerzel() == erwartet  # liegt in der Datenbank
+    speicher.kuerzel_setzen([])
+    assert speicher.kuerzel() == []
+
+
+@pytest.mark.parametrize("liste", [
+    [{"kuerzel": "R", "bezeichnung": "Rechtschreibung"}],
+    [{"kuerzel": "z", "bezeichnung": "Zeichensetzung"}],
+    [{"kuerzel": "gr", "bezeichnung": "Grammatik"}],
+    [{"kuerzel": "", "bezeichnung": "leer"}],
+    [{"kuerzel": "Ausdr", "bezeichnung": "zu lang"}],
+    [{"kuerzel": "A1", "bezeichnung": "Ziffer"}],
+    [{"kuerzel": "A", "bezeichnung": ""}],
+    [{"kuerzel": "A", "bezeichnung": "x" * 41}],
+    [{"kuerzel": "A", "bezeichnung": "eins"}, {"kuerzel": "a", "bezeichnung": "zwei"}],
+])
+def test_kuerzel_setzen_lehnt_unzulaessige_kuerzel_ab(speicher, liste):
+    with pytest.raises(ValueError):
+        speicher.kuerzel_setzen(liste)
+    assert [e["kuerzel"] for e in speicher.kuerzel()] == ["A", "Sb", "T", "W", "I"]
+
+
+def test_zeichen_mit_entferntem_kuerzel_bleiben_bestehen(speicher):
+    arbeit_id, (seite_id,), _ = _fertige_arbeit(speicher)
+    neu = speicher.zeichen_anlegen(seite_id, _zeichen(kategorie="T", herkunft="hand",
+                                                      status="bestaetigt"))
+    speicher.kuerzel_setzen([{"kuerzel": "A", "bezeichnung": "Ausdruck"}])
+    assert speicher.zeichen_eintrag(neu)["kategorie"] == "T"
+
+
+def test_arbeiten_und_arbeit_liefern_bestaetigung_und_bestaetigbar(speicher):
+    nr = _aufgabe(speicher)
+    offen_s = speicher.arbeit_anlegen(nr, [("a.jpg", _bild())])
+    fertig_s = speicher.arbeit_anlegen(nr, [("b.jpg", _bild())])
+    speicher.arbeit_anlegen(nr, [("c.jpg", _bild())])
+    for (seite_id,), zeichen in ((offen_s, [_zeichen()]), (fertig_s, [_zeichen(**FEST)])):
+        lauf = speicher.seite_lauf_beginnen(seite_id)
+        speicher.zeichen_ersetzen(seite_id, lauf, zeichen)
+        speicher.seite_status(seite_id, "fertig", lauf=lauf)
+    offen, fertig, wartet = speicher.arbeiten(nr)
+    assert (offen["bestaetigbar"], fertig["bestaetigbar"], wartet["bestaetigbar"]) == (
+        False, True, False)
+    assert "offen" in offen["bestaetigbar_grund"] and fertig["bestaetigbar_grund"] == ""
+    assert "läuft" in wartet["bestaetigbar_grund"]
+    assert fertig["bestaetigt_am"] is None and fertig["bestaetigung"] is None
+
+    zahlen = speicher.arbeit_bestaetigen(fertig["id"])
+    fertig = speicher.arbeiten(nr)[1]
+    assert fertig["bestaetigt_am"] and fertig["bestaetigung"] == zahlen
+    assert zahlen == {"einzeln": 1, "gesammelt": 0, "geaendert": 0, "verworfen": 0, "hand": 0}
+    einzeln = speicher.arbeit(fertig["id"])
+    assert einzeln["bestaetigt_am"] == fertig["bestaetigt_am"]
+    assert einzeln["bestaetigung"] == zahlen and einzeln["bestaetigbar"] is True
+    einzeln = speicher.arbeit(offen["id"])
+    assert einzeln["bestaetigbar"] is False and "offen" in einzeln["bestaetigbar_grund"]

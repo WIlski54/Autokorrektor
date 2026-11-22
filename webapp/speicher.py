@@ -14,6 +14,7 @@ from pathlib import Path
 from PIL import Image
 
 from korrektor import bild
+from webapp import regeln
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS aufgabe (
@@ -88,6 +89,10 @@ CREATE INDEX IF NOT EXISTS zeichen_seite ON zeichen(seite_id);
 AUFGABE_FELDER = ("titel", "fach", "jahrgang", "kategorien", "verfahren", "vorschlag_in_ausgabe")
 ANALYSE_STATUS = ("neu", "wartet", "laeuft", "fertig", "fehlgeschlagen")
 SEITE_FELDER = ("fehlermeldung", "transkription", "dauer_s", "verworfen")
+ZEICHEN_FELDER = ("kategorie", "vorschlag", "x", "y", "breite", "hoehe", "status",
+                  "bestaetigt_wie")
+KUERZEL_VOREINSTELLUNG = (("A", "Ausdruck"), ("Sb", "Satzbau"), ("T", "Tempus"),
+                          ("W", "Wortwahl"), ("I", "Inhalt"))
 
 
 def _jetzt():
@@ -113,6 +118,23 @@ def _zeichen_aus_zeile(zeile):
     zeichen = dict(zeile)
     zeichen["rahmen_ki"] = json.loads(zeichen["rahmen_ki"]) if zeichen["rahmen_ki"] else None
     return zeichen
+
+
+def _arbeit_aus_zeile(zeile):
+    arbeit = dict(zeile)
+    arbeit["bestaetigung"] = json.loads(arbeit["bestaetigung"]) if arbeit["bestaetigung"] else None
+    return arbeit
+
+
+def _bestaetigbar_eintragen(arbeit):
+    """Ergänzt `bestaetigbar` und `bestaetigbar_grund` aus den Seiten der Arbeit."""
+    arbeit["bestaetigbar"], arbeit["bestaetigbar_grund"] = regeln.bestaetigbar(arbeit["seiten"])
+
+
+def _felder_pruefen(felder, erlaubt):
+    unbekannt = set(felder) - set(erlaubt)
+    if unbekannt:
+        raise ValueError(f"unbekannte Felder: {', '.join(sorted(unbekannt))}")
 
 
 def _ueberdeckt(neu, alt):
@@ -399,9 +421,13 @@ class Speicher:
             raise
 
     def arbeiten(self, aufgabe_id):
-        """Arbeiten der Aufgabe in Stapelreihenfolge, je mit seiten, offen und status_gesamt."""
+        """Arbeiten der Aufgabe in Stapelreihenfolge.
+
+        Je mit seiten, offen, status_gesamt, bestaetigung (dict oder None), bestaetigbar
+        und bestaetigbar_grund.
+        """
         with self._verbindung() as db:
-            arbeiten = [dict(z) for z in db.execute(
+            arbeiten = [_arbeit_aus_zeile(z) for z in db.execute(
                 "SELECT * FROM arbeit WHERE aufgabe_id = ? ORDER BY reihenfolge, id",
                 (aufgabe_id,))]
             seiten = db.execute(
@@ -418,20 +444,29 @@ class Speicher:
             je_arbeit[seite["arbeit_id"]]["seiten"].append(seite)
         for arbeit in arbeiten:
             arbeit["status_gesamt"] = status_gesamt(s["analyse_status"] for s in arbeit["seiten"])
+            _bestaetigbar_eintragen(arbeit)
         return arbeiten
 
     def arbeit(self, id):
-        """Eine Arbeit mit ihren Seiten und je Seite den Zeichen."""
+        """Eine Arbeit mit ihren Seiten und je Seite den Zeichen (auch den verworfenen).
+
+        Dazu bestaetigung (dict oder None), bestaetigbar und bestaetigbar_grund.
+        """
         with self._verbindung() as db:
-            zeile = db.execute("SELECT * FROM arbeit WHERE id = ?", (id,)).fetchone()
-            if zeile is None:
-                return None
-            arbeit = dict(zeile)
-            arbeit["seiten"] = [dict(z) for z in db.execute(
-                "SELECT * FROM seite WHERE arbeit_id = ? ORDER BY nummer, id", (id,))]
-            for seite in arbeit["seiten"]:
-                seite["zeichen"] = [_zeichen_aus_zeile(z) for z in db.execute(
-                    "SELECT * FROM zeichen WHERE seite_id = ? ORDER BY y, x, id", (seite["id"],))]
+            return self._arbeit_lesen(db, id)
+
+    @staticmethod
+    def _arbeit_lesen(db, id):
+        zeile = db.execute("SELECT * FROM arbeit WHERE id = ?", (id,)).fetchone()
+        if zeile is None:
+            return None
+        arbeit = _arbeit_aus_zeile(zeile)
+        arbeit["seiten"] = [dict(z) for z in db.execute(
+            "SELECT * FROM seite WHERE arbeit_id = ? ORDER BY nummer, id", (id,))]
+        for seite in arbeit["seiten"]:
+            seite["zeichen"] = [_zeichen_aus_zeile(z) for z in db.execute(
+                "SELECT * FROM zeichen WHERE seite_id = ? ORDER BY y, x, id", (seite["id"],))]
+        _bestaetigbar_eintragen(arbeit)
         return arbeit
 
     def seite(self, id):
@@ -489,12 +524,14 @@ class Speicher:
         Bestätigte, verworfene und von Hand gesetzte Zeichen bleiben erhalten; ein neuer
         Vorschlag entfällt, wenn er sich mit einem erhaltenen Zeichen desselben Typs
         überdeckt (siehe `_ueberdeckt`). Eine Lücke in einer erhaltenen Wortgruppe bleibt.
+        Sobald geschrieben wird, verfällt die Gesamtbestätigung der Arbeit.
         """
         with self._verbindung() as db:
             db.execute("BEGIN IMMEDIATE")
             zeile = db.execute("SELECT lauf FROM seite WHERE id = ?", (seite_id,)).fetchone()
             if zeile is None or zeile["lauf"] != lauf:
                 return False
+            self._bestaetigung_leeren(db, seite_id=seite_id)
             db.execute("DELETE FROM zeichen WHERE seite_id = ? AND herkunft = 'ki'"
                        " AND status = 'offen'", (seite_id,))
             erhalten = [(z["typ"], (z["x"], z["y"], z["breite"], z["hoehe"])) for z in db.execute(
@@ -520,3 +557,165 @@ class Speicher:
         with self._verbindung() as db:
             return [z[0] for z in db.execute(
                 "SELECT id FROM seite WHERE analyse_status IN ('wartet', 'laeuft') ORDER BY id")]
+
+    # --- Zeichen bearbeiten (Etappe 2) --------------------------------------------------------
+    # Jede Schreibmethode an Zeichen hebt in derselben Transaktion die Gesamtbestätigung
+    # der betroffenen Arbeit auf.
+
+    @staticmethod
+    def _bestaetigung_leeren(db, arbeit_id=None, seite_id=None):
+        if arbeit_id is None:
+            arbeit_id = db.execute("SELECT arbeit_id FROM seite WHERE id = ?",
+                                   (seite_id,)).fetchone()["arbeit_id"]
+        db.execute("UPDATE arbeit SET bestaetigt_am = NULL, bestaetigung = NULL WHERE id = ?",
+                   (arbeit_id,))
+
+    def zeichen_eintrag(self, id):
+        """Ein Zeichen mit `seite_id` und `arbeit_id`; None, wenn es das nicht (mehr) gibt."""
+        with self._verbindung() as db:
+            zeile = db.execute(
+                "SELECT z.*, s.arbeit_id FROM zeichen z JOIN seite s ON s.id = z.seite_id"
+                " WHERE z.id = ?", (id,)).fetchone()
+        return _zeichen_aus_zeile(zeile) if zeile else None
+
+    def zeichen_aendern(self, id, **felder):
+        """Schreibt die genannten Felder; gibt zurück, ob es das Zeichen gibt.
+
+        Ohne Felder wird nichts geschrieben, die Bestätigung der Arbeit bleibt dann stehen.
+        """
+        _felder_pruefen(felder, ZEICHEN_FELDER)
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            zeile = db.execute("SELECT seite_id FROM zeichen WHERE id = ?", (id,)).fetchone()
+            if zeile is None:
+                return False
+            if felder:
+                zuweisung = ", ".join(f"{feld} = ?" for feld in felder)
+                db.execute(f"UPDATE zeichen SET {zuweisung} WHERE id = ?", (*felder.values(), id))
+                self._bestaetigung_leeren(db, seite_id=zeile["seite_id"])
+            return True
+
+    def zeichen_anlegen(self, seite_id, zeichen):
+        """Legt ein Zeichen an (siehe `regeln.neues_handzeichen`); gibt seine id zurück.
+
+        ValueError, wenn es die Seite nicht (mehr) gibt.
+        """
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM seite WHERE id = ?", (seite_id,)).fetchone() is None:
+                raise ValueError(f"Seite {seite_id} gibt es nicht")
+            rahmen_ki = zeichen.get("rahmen_ki")
+            neu = db.execute(
+                "INSERT INTO zeichen (seite_id, kategorie, typ, x, y, breite, hoehe, gelesen,"
+                " vorschlag, herkunft, status, bestaetigt_wie, rahmen_ki)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (seite_id, zeichen["kategorie"], zeichen.get("typ", "wort"),
+                 zeichen["x"], zeichen["y"], zeichen["breite"], zeichen["hoehe"],
+                 zeichen.get("gelesen") or "", zeichen.get("vorschlag") or "",
+                 zeichen.get("herkunft", "hand"), zeichen.get("status", "bestaetigt"),
+                 zeichen.get("bestaetigt_wie"),
+                 json.dumps(list(rahmen_ki)) if rahmen_ki is not None else None)).lastrowid
+            self._bestaetigung_leeren(db, seite_id=seite_id)
+            return neu
+
+    def zeichen_loeschen(self, id):
+        """Entfernt das Zeichen; gibt zurück, ob es das Zeichen gab."""
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            zeile = db.execute("SELECT seite_id FROM zeichen WHERE id = ?", (id,)).fetchone()
+            if zeile is None:
+                return False
+            db.execute("DELETE FROM zeichen WHERE id = ?", (id,))
+            self._bestaetigung_leeren(db, seite_id=zeile["seite_id"])
+            return True
+
+    def zeichen_viele_setzen(self, ids, nur_status=None, **felder):
+        """Setzt dieselben Felder auf mehreren Zeichen, alles in einer Transaktion.
+
+        Mit `nur_status` werden nur Zeichen geschrieben, die dann noch diesen Status haben
+        (etwa `offen` für „Rest bestätigen“). Gibt die ids der geschriebenen Zeichen in der
+        genannten Reihenfolge zurück; nur deren Arbeiten verlieren die Bestätigung.
+        """
+        _felder_pruefen(felder, ZEICHEN_FELDER)
+        if not felder:
+            return []
+        zuweisung = ", ".join(f"{feld} = ?" for feld in felder)
+        geschrieben, arbeiten = [], set()
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for id in dict.fromkeys(ids):
+                zeile = db.execute(
+                    "SELECT z.status, s.arbeit_id FROM zeichen z JOIN seite s"
+                    " ON s.id = z.seite_id WHERE z.id = ?", (id,)).fetchone()
+                if zeile is None or (nur_status is not None and zeile["status"] != nur_status):
+                    continue
+                db.execute(f"UPDATE zeichen SET {zuweisung} WHERE id = ?", (*felder.values(), id))
+                geschrieben.append(id)
+                arbeiten.add(zeile["arbeit_id"])
+            for arbeit_id in arbeiten:
+                self._bestaetigung_leeren(db, arbeit_id=arbeit_id)
+        return geschrieben
+
+    # --- Gesamtbestätigung und Kürzel der Arbeit ----------------------------------------------
+
+    def arbeit_bestaetigen(self, arbeit_id, zahlen=None):
+        """Bestätigt die Korrektur der Arbeit: setzt `bestaetigt_am` und `bestaetigung`.
+
+        Prüfen und Schreiben laufen in einer Transaktion. `RegelFehler`, wenn die Arbeit
+        nicht bestätigbar ist oder die genannten `zahlen` (die der Dialog gezeigt hat) nicht
+        mehr zum Stand passen. Ohne `zahlen` gelten die des aktuellen Stands. Gibt die
+        gespeicherten Zahlen zurück, None, wenn es die Arbeit nicht (mehr) gibt.
+        """
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            arbeit = self._arbeit_lesen(db, arbeit_id)
+            if arbeit is None:
+                return None
+            if not arbeit["bestaetigbar"]:
+                raise regeln.RegelFehler(arbeit["bestaetigbar_grund"])
+            aktuell = regeln.zahlen([z for seite in arbeit["seiten"] for z in seite["zeichen"]])
+            if zahlen is not None and dict(zahlen) != aktuell:
+                raise regeln.RegelFehler("Die Zeichen der Arbeit wurden inzwischen geändert. "
+                                         "Bitte die Zahlen noch einmal ansehen.")
+            db.execute("UPDATE arbeit SET bestaetigt_am = ?, bestaetigung = ? WHERE id = ?",
+                       (_jetzt(), json.dumps(aktuell), arbeit_id))
+            return aktuell
+
+    def arbeit_bestaetigung_aufheben(self, arbeit_id):
+        """Hebt die Gesamtbestätigung auf, etwa beim Start einer Neuanalyse."""
+        with self._verbindung() as db:
+            self._bestaetigung_leeren(db, arbeit_id=arbeit_id)
+
+    def arbeit_kuerzel_setzen(self, arbeit_id, kuerzel):
+        """Benennt die Arbeit um; die Bestätigung bleibt. Gibt zurück, ob es die Arbeit gibt.
+
+        `RegelFehler` (ein ValueError) bei einem unzulässigen Kürzel.
+        """
+        kuerzel = regeln.arbeitskuerzel_pruefen(kuerzel)
+        with self._verbindung() as db:
+            return db.execute("UPDATE arbeit SET kuerzel = ? WHERE id = ?",
+                              (kuerzel, arbeit_id)).rowcount > 0
+
+    # --- Einstellung: eigene Kürzel -----------------------------------------------------------
+
+    def kuerzel(self):
+        """Die eigenen Kürzel als [{kuerzel, bezeichnung}]; anfangs die Voreinstellung."""
+        with self._verbindung() as db:
+            zeile = db.execute("SELECT wert FROM einstellung WHERE schluessel = 'kuerzel'"
+                               ).fetchone()
+        if zeile is None:
+            return [{"kuerzel": k, "bezeichnung": b} for k, b in KUERZEL_VOREINSTELLUNG]
+        return json.loads(zeile["wert"])
+
+    def kuerzel_setzen(self, liste):
+        """Speichert die Liste eigener Kürzel; `RegelFehler` (ein ValueError) bei Unzulässigem.
+
+        Zeichen mit einem entfernten Kürzel bleiben, wie sie sind. Gibt die bereinigte
+        Liste zurück.
+        """
+        sauber = regeln.kuerzelliste_pruefen(liste)
+        with self._verbindung() as db:
+            db.execute("INSERT INTO einstellung (schluessel, wert) VALUES ('kuerzel', ?)"
+                       " ON CONFLICT(schluessel) DO UPDATE SET wert = excluded.wert",
+                       (json.dumps(sauber, ensure_ascii=False),))
+        return sauber
