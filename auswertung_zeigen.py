@@ -8,6 +8,8 @@ from korrektor import auswertung as a
 bild = sys.argv[1]
 L = a.loesung_laden(".", bild)
 for datei in sorted(Path("ergebnisse").glob(f"*/{Path(bild).stem}.json")):
+    if datei.parent.name.startswith("_"):  # Zwischenspeicher, keine Ergebnisse
+        continue
     e = json.loads(datei.read_text(encoding="utf-8"))
     w = a.bild_auswerten(e, L, a.klicks_laden("."))
     z, d = a.zuordnen(e["funde"], L["fehler"])
