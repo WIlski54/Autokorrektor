@@ -571,3 +571,82 @@ def test_stapelansicht_weist_auf_fotos_in_der_ablage_hin(client, speicher):
     assert "noch nicht zugeordnet" not in _text(client.get(f"/aufgabe/{nr}"))
     _ablage_fuellen(speicher, nr, 2)
     assert "2 Fotos sind noch nicht zugeordnet" in _text(client.get(f"/aufgabe/{nr}"))
+
+
+# --- Task 10: Arbeit ansehen --------------------------------------------------------------
+
+def _mit_zeichen(speicher, seite_id, *zeichen):
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    assert speicher.zeichen_ersetzen(seite_id, lauf, list(zeichen)) is True
+    speicher.seite_status(seite_id, "fertig", transkription="Text")
+
+
+def test_arbeit_zeigt_seite_mit_zeichen_als_daten(client, speicher):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    _mit_zeichen(speicher, s1, _zeichen(),
+                 _zeichen("dass er", "dass, er", kategorie="Z", typ="luecke",
+                          x=200, y=100, breite=6, hoehe=20))
+    erste, zweite = speicher.arbeiten(nr)
+    antwort = client.get(f"/arbeit/{erste['id']}")
+    text = _text(antwort)
+    assert antwort.status_code == 200
+    daten = _daten(text, "arbeit-daten")
+    assert daten["seite"] == {"id": s1, "nummer": 1, "breite": 600, "hoehe": 400}
+    wort, luecke = daten["zeichen"]
+    assert wort["kategorie"] == "R" and wort["typ"] == "wort" and wort["status"] == "offen"
+    assert (wort["x"], wort["y"], wort["breite"], wort["hoehe"]) == (10, 20, 30, 8)
+    assert wort["gelesen"] == "Fahrad" and wort["vorschlag"] == "Fahrrad" and wort["id"]
+    assert luecke["typ"] == "luecke" and luecke["kategorie"] == "Z"
+    assert f'src="/bild/seite/{s1}"' in text
+    assert "Seite 1 von 2" in text and "Etappe 2" in text
+    assert "Fahrad" in text and "Fahrrad" in text and f'data-zeichen="{wort["id"]}"' in text
+    assert f'href="/arbeit/{erste["id"]}?seite=2"' in text
+    assert f'href="/arbeit/{zweite["id"]}"' in text
+    assert "<form" not in text  # nur lesend
+
+
+def test_arbeit_blaettert_zur_zweiten_seite(client, speicher):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    _mit_zeichen(speicher, s2, _zeichen("nähmlich", "nämlich"))
+    erste, zweite = speicher.arbeiten(nr)
+    text = _text(client.get(f"/arbeit/{erste['id']}?seite=2"))
+    daten = _daten(text, "arbeit-daten")
+    assert daten["seite"]["id"] == s2 and [z["gelesen"] for z in daten["zeichen"]] == ["nähmlich"]
+    assert "Seite 2 von 2" in text and f'href="/arbeit/{erste["id"]}?seite=1"' in text
+    text = _text(client.get(f"/arbeit/{zweite['id']}"))
+    assert "Seite 1 von 1" in text and f'href="/arbeit/{erste["id"]}"' in text
+
+
+@pytest.mark.parametrize("pfad", ["/arbeit/999", "/arbeit/{id}?seite=3", "/arbeit/{id}?seite=0"])
+def test_unbekannte_arbeit_oder_seite_ergibt_404(client, speicher, pfad):
+    nr, _ = _zwei_arbeiten(speicher)
+    assert client.get(pfad.format(id=speicher.arbeiten(nr)[0]["id"])).status_code == 404
+
+
+def test_arbeit_maskiert_texte_des_modells(client, speicher):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    _mit_zeichen(speicher, s1, _zeichen("<script>alert(1)</script>", "a<b & \"c\"",
+                                        kategorie="<i>R</i>"))
+    speicher.seite_status(s2, "fehlgeschlagen", fehlermeldung="<img src=x onerror=alert(2)>")
+    arbeit_id = speicher.arbeiten(nr)[0]["id"]
+    text = _text(client.get(f"/arbeit/{arbeit_id}"))
+    assert "<script>alert(1)</script>" not in text and "a<b" not in text and "<i>R</i>" not in text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in text and "a&lt;b &amp; " in text
+    (zeichen,) = _daten(text, "arbeit-daten")["zeichen"]
+    assert zeichen["gelesen"] == "<script>alert(1)</script>" and zeichen["vorschlag"] == 'a<b & "c"'
+    text = _text(client.get(f"/arbeit/{arbeit_id}?seite=2"))
+    assert "<img src=x" not in text and "&lt;img src=x onerror=alert(2)&gt;" in text
+
+
+def test_arbeit_zeigt_verworfene_zeichen_nicht(client, speicher):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    _mit_zeichen(speicher, s1, _zeichen(), _zeichen("wier", "wir", x=300, status="verworfen"))
+    text = _text(client.get(f"/arbeit/{speicher.arbeiten(nr)[0]['id']}"))
+    assert [z["gelesen"] for z in _daten(text, "arbeit-daten")["zeichen"]] == ["Fahrad"]
+    assert "wier" not in text
+
+
+def test_arbeit_ohne_analyse_nennt_den_stand(client, speicher):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    text = _text(client.get(f"/arbeit/{speicher.arbeiten(nr)[1]['id']}"))
+    assert "noch nicht analysiert" in text and _daten(text, "arbeit-daten")["zeichen"] == []

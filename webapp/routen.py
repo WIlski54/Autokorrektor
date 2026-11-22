@@ -217,8 +217,28 @@ def arbeit(arbeit_id):
     arbeit = _speicher().arbeit(arbeit_id)
     if arbeit is None:
         abort(404)
+    nummer = request.args.get("seite", default=1, type=int)
+    if not 1 <= nummer <= len(arbeit["seiten"]):
+        abort(404)
+    seite = arbeit["seiten"][nummer - 1]
+    # Verworfene Zeichen bleiben gespeichert, werden hier aber nicht gezeigt.
+    zeichen = [z for z in seite["zeichen"] if z["status"] != "verworfen"]
     aufgabe = _speicher().aufgabe(arbeit["aufgabe_id"])
-    return render_template("arbeit.html", aufgabe=aufgabe, arbeit=arbeit)
+    reihe = [a["id"] for a in _speicher().arbeiten(arbeit["aufgabe_id"])]
+    platz = reihe.index(arbeit_id)
+    daten = {
+        "seite": {"id": seite["id"], "nummer": nummer, "breite": seite["breite"],
+                  "hoehe": seite["hoehe"]},
+        "zeichen": [{feld: z[feld] for feld in (
+            "id", "kategorie", "typ", "x", "y", "breite", "hoehe", "gelesen", "vorschlag",
+            "herkunft", "status")} for z in zeichen],
+    }
+    return render_template(
+        "arbeit.html", aufgabe=aufgabe, arbeit=arbeit, seite=seite, nummer=nummer,
+        seitenzahl=len(arbeit["seiten"]), zeichen=zeichen, daten=daten,
+        statustext=STATUSTEXT, kategorien=dict(KATEGORIEN),
+        vorige_arbeit=reihe[platz - 1] if platz > 0 else None,
+        naechste_arbeit=reihe[platz + 1] if platz + 1 < len(reihe) else None)
 
 
 # --- Bilder -------------------------------------------------------------------------------
