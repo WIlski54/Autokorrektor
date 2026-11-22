@@ -1,0 +1,9 @@
+{% extends "grundriss.html" %}
+{% block titel %}Arbeit {{ arbeit.kuerzel }} – {{ aufgabe.titel }}{% endblock %}
+{% block krumen %}
+<li><a href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">{{ aufgabe.titel }}</a></li>
+<li aria-current="page">Arbeit {{ arbeit.kuerzel }}</li>
+{% endblock %}
+{% block inhalt %}
+<h1>Arbeit {{ arbeit.kuerzel }}</h1>
+{% endblock %}

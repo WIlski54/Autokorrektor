@@ -1,4 +1,5 @@
 """Alle Seiten und JSON-Schnittstellen der Etappe 1."""
+import re
 from urllib.parse import urlsplit
 
 from flask import (Blueprint, Response, abort, current_app, flash, redirect, render_template,
@@ -143,10 +144,81 @@ def aufgabe_loeschen(aufgabe_id):
 
 # --- Stapelansicht ------------------------------------------------------------------------
 
+STATUSTEXT = {
+    "neu": "noch nicht analysiert",
+    "wartet": "wartet",
+    "laeuft": "Analyse läuft",
+    "fertig": "analysiert",
+    "fehlgeschlagen": "fehlgeschlagen",
+}
+
+
+def _stand(aufgabe_id):
+    """Der Stand der Analyse einer Aufgabe als einfache Daten für Seite und Abfrage."""
+    arbeiten = []
+    gesamt = {"seiten": 0, "fertig": 0, "fehlgeschlagen": 0, "unterwegs": 0, "offen": 0}
+    for arbeit in _speicher().arbeiten(aufgabe_id):
+        seiten_der_arbeit = [{"id": s["id"], "nummer": s["nummer"], "status": s["analyse_status"],
+                              "fehlermeldung": s["fehlermeldung"]} for s in arbeit["seiten"]]
+        arbeiten.append({"id": arbeit["id"], "kuerzel": arbeit["kuerzel"],
+                         "seitenzahl": len(seiten_der_arbeit),
+                         "status_gesamt": arbeit["status_gesamt"], "offen": arbeit["offen"],
+                         "seiten": seiten_der_arbeit})
+        gesamt["offen"] += arbeit["offen"]
+        for seite in seiten_der_arbeit:
+            gesamt["seiten"] += 1
+            if seite["status"] in ("fertig", "fehlgeschlagen"):
+                gesamt[seite["status"]] += 1
+            elif seite["status"] in ("wartet", "laeuft"):
+                gesamt["unterwegs"] += 1
+    return {"arbeiten": arbeiten, "gesamt": gesamt, "aktiv": gesamt["unterwegs"] > 0}
+
+
 @seiten.get("/aufgabe/<int:aufgabe_id>")
 def stapel(aufgabe_id):
     aufgabe = _aufgabe_oder_404(aufgabe_id)
-    return render_template("stapel.html", aufgabe=aufgabe)
+    stand = _stand(aufgabe_id)
+    daten = {
+        "url_stand": url_for("seiten.stand", aufgabe_id=aufgabe_id),
+        "url_erneut": url_for("seiten.seite_erneut", seite_id=0),
+        "aktiv": stand["aktiv"],
+        "statustext": STATUSTEXT,
+    }
+    return render_template("stapel.html", aufgabe=aufgabe, stand=stand, daten=daten,
+                           statustext=STATUSTEXT, in_ablage=len(_speicher().ablage(aufgabe_id)))
+
+
+@seiten.get("/aufgabe/<int:aufgabe_id>/stand")
+def stand(aufgabe_id):
+    _aufgabe_oder_404(aufgabe_id)
+    return _stand(aufgabe_id)
+
+
+@seiten.post("/seite/<int:seite_id>/erneut")
+def seite_erneut(seite_id):
+    """Reiht eine fehlgeschlagene Seite neu ein."""
+    seite = _speicher().seite(seite_id)
+    if seite is None:
+        abort(404)
+    if seite["analyse_status"] != "fehlgeschlagen":
+        return {"fehler": "Nur fehlgeschlagene Seiten lassen sich erneut analysieren."}, 409
+    arbeit = _speicher().arbeit(seite["arbeit_id"])
+    grund = _hindernis(_speicher().aufgabe(arbeit["aufgabe_id"]))
+    if grund:
+        return {"fehler": grund}, 409
+    _schlange().einreihen(seite_id)
+    return {"ok": True}
+
+
+# --- Arbeit ansehen -----------------------------------------------------------------------
+
+@seiten.get("/arbeit/<int:arbeit_id>")
+def arbeit(arbeit_id):
+    arbeit = _speicher().arbeit(arbeit_id)
+    if arbeit is None:
+        abort(404)
+    aufgabe = _speicher().aufgabe(arbeit["aufgabe_id"])
+    return render_template("arbeit.html", aufgabe=aufgabe, arbeit=arbeit)
 
 
 # --- Bilder -------------------------------------------------------------------------------
@@ -183,6 +255,12 @@ def bild_ablage(ablage_id):
 
 
 # --- Hochladen und Zuordnen ---------------------------------------------------------------
+
+def _natuerlich(dateiname):
+    """Sortierschlüssel, der Zahlen im Namen als Zahlen vergleicht (9 vor 10)."""
+    return [int(teil) if teil.isdigit() else teil.casefold()
+            for teil in re.split(r"(\d+)", dateiname)]
+
 
 def _megabyte(zahl_bytes):
     return f"{zahl_bytes / (1024 * 1024):.0f} MB"
@@ -301,7 +379,8 @@ def arbeit_hinzufuegen(aufgabe_id):
         flash("Es wurde kein Foto ausgewählt.", "fehler")
         return zurueck
     try:
-        seiten_ids = _speicher().arbeit_anlegen(aufgabe_id, gelesen)
+        seiten_ids = _speicher().arbeit_anlegen(
+            aufgabe_id, sorted(gelesen, key=lambda datei: _natuerlich(datei[0])))
     except ValueError as fehler:
         flash(f"Die Arbeit wurde nicht hinzugefügt ({fehler}). "
               "Erlaubt sind JPG, PNG und WebP.", "fehler")

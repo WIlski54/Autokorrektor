@@ -234,6 +234,59 @@ progress { height: .5rem; accent-color: var(--akzent); }
 }
 .fussleiste .leise { margin-left: .75rem; }
 
+/* --- Stapelansicht --- */
+
+.knopfreihe.oben { margin-top: 0; }
+
+.gesamt { margin: 0 0 1.5rem; }
+.gesamt progress { display: block; width: 100%; height: .6rem; }
+.gesamt p { margin: .4rem 0 0; color: var(--leise); font-variant-numeric: tabular-nums; }
+
+.kacheln { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 1.25rem; }
+.kachel {
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--flaeche); border: 1px solid var(--linie); border-radius: var(--rund);
+  box-shadow: var(--schatten);
+}
+.kachelbild { display: block; background: #eeeeea; }
+.kachelbild img { display: block; width: 100%; height: 13rem; object-fit: cover; object-position: top; }
+.kacheltext { padding: .85rem 1rem 1rem; }
+.kacheltext h2 { margin: 0; font-size: 1.05rem; }
+.kacheltext h2 a { color: var(--text); text-decoration: none; }
+.kacheltext h2 a:hover { text-decoration: underline; }
+.kacheltext p { margin: .2rem 0; }
+.kacheltext p:empty { display: none; }
+
+.status {
+  display: inline-block; padding: .1rem .6rem; border-radius: 999px;
+  font-size: .85rem; font-weight: 500; background: #ecece7; color: var(--leise);
+}
+.status-laeuft, .status-wartet { background: var(--akzent-hell); color: var(--akzent-dunkel); }
+.status-laeuft::before {
+  content: ""; display: inline-block; width: .55rem; height: .55rem; margin-right: .4rem;
+  border-radius: 50%; background: var(--akzent); animation: puls 1.2s ease-in-out infinite;
+}
+.status-fertig { background: var(--erfolg-hell); color: var(--erfolg); }
+.status-fehlgeschlagen { background: var(--gefahr-hell); color: var(--gefahr); }
+@keyframes puls { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .status-laeuft::before { animation: none; } }
+
+.fehlerliste { list-style: none; margin: .5rem 0 0; padding: 0; }
+.fehlerliste:empty { display: none; }
+.fehlerliste li {
+  margin-top: .5rem; padding: .5rem .6rem; border-radius: 6px;
+  background: var(--gefahr-hell); font-size: .88rem; overflow-wrap: anywhere;
+}
+.fehlerliste li span { display: block; margin-bottom: .4rem; }
+
+.hinzufuegen {
+  margin-top: 2.5rem; padding: 1.1rem 1.25rem;
+  background: var(--flaeche); border: 1px solid var(--linie); border-radius: var(--rund);
+}
+.hinzufuegen h2 { margin-top: 0; }
+.hinzufuegen form { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
+.hinzufuegen input[type="file"] { font: inherit; max-width: 100%; }
+
 @media (max-width: 640px) {
   .seitenkopf { padding: .75rem 1rem; }
   .inhalt { padding: 1.25rem 1rem; }

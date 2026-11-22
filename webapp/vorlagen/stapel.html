@@ -2,14 +2,85 @@
 {% block titel %}{{ aufgabe.titel }}{% endblock %}
 {% block krumen %}<li aria-current="page">{{ aufgabe.titel }}</li>{% endblock %}
 {% block inhalt %}
+{% set g = stand.gesamt %}
 <div class="titelzeile">
   <div>
     <h1>{{ aufgabe.titel }}</h1>
     <p class="leise unterzeile">{{ aufgabe.fach }}, Jahrgang {{ aufgabe.jahrgang }} · prüft {{ aufgabe.kategorien|join(', ') }} · {{ anzeigename(aufgabe.verfahren) }}</p>
   </div>
-  <div class="knopfreihe">
+  <div class="knopfreihe oben">
     <a class="knopf" href="{{ url_for('seiten.aufgabe_bearbeiten', aufgabe_id=aufgabe.id) }}">Einstellungen</a>
-    <a class="knopf haupt" href="{{ url_for('seiten.hochladen', aufgabe_id=aufgabe.id) }}">Fotos hochladen</a>
+    <a class="knopf{{ '' if stand.arbeiten else ' haupt' }}" href="{{ url_for('seiten.hochladen', aufgabe_id=aufgabe.id) }}">Fotos hochladen</a>
   </div>
 </div>
+
+{% if in_ablage %}
+<p class="meldung">
+  {{ '1 Foto ist' if in_ablage == 1 else in_ablage ~ ' Fotos sind' }} noch nicht zugeordnet.
+  <a href="{{ url_for('seiten.hochladen', aufgabe_id=aufgabe.id) }}">Zuordnen und Analyse starten</a>
+</p>
+{% endif %}
+
+<p id="stapelfehler" class="meldung fehler" role="alert" hidden></p>
+
+{% if stand.arbeiten %}
+<section class="gesamt" aria-label="Gesamtfortschritt">
+  <progress id="gesamtbalken" max="{{ g.seiten }}" value="{{ g.fertig }}"></progress>
+  <p id="gesamttext" role="status">
+    {{- g.fertig }} von {{ g.seiten }} Seiten analysiert
+    {%- if g.unterwegs %} · {{ g.unterwegs }} in Arbeit{% endif %}
+    {%- if g.fehlgeschlagen %} · {{ g.fehlgeschlagen }} fehlgeschlagen{% endif %}
+    {%- if g.offen %} · {{ '1 offener Vorschlag' if g.offen == 1 else g.offen ~ ' offene Vorschläge' }}{% endif -%}
+  </p>
+</section>
+
+<div id="kacheln" class="kacheln">
+  {% for a in stand.arbeiten %}
+  <article class="kachel" data-arbeit="{{ a.id }}">
+    <a class="kachelbild" href="{{ url_for('seiten.arbeit', arbeit_id=a.id) }}" aria-label="Arbeit {{ a.kuerzel }} öffnen">
+      <img src="{{ url_for('seiten.bild_seite', seite_id=a.seiten[0].id) }}?b=300" alt="" loading="lazy">
+    </a>
+    <div class="kacheltext">
+      <h2><a href="{{ url_for('seiten.arbeit', arbeit_id=a.id) }}">Arbeit {{ a.kuerzel }}</a></h2>
+      <p class="leise">{{ '1 Seite' if a.seitenzahl == 1 else a.seitenzahl ~ ' Seiten' }}</p>
+      <p><span class="status status-{{ a.status_gesamt }}" data-rolle="status">{{ statustext[a.status_gesamt] }}</span></p>
+      <p class="leise" data-rolle="offen">
+        {%- if a.offen == 1 %}1 offener Vorschlag
+        {%- elif a.offen %}{{ a.offen }} offene Vorschläge
+        {%- elif a.status_gesamt == 'fertig' %}keine offenen Vorschläge
+        {%- endif -%}
+      </p>
+      <ul class="fehlerliste" data-rolle="fehler">
+        {% for s in a.seiten if s.status == 'fehlgeschlagen' %}
+        <li>
+          <span>Seite {{ s.nummer }}: {{ s.fehlermeldung or 'Analyse fehlgeschlagen' }}</span>
+          <button class="knopf klein" type="button" data-seite="{{ s.id }}">Erneut versuchen</button>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="leer">
+  <p>Noch keine Arbeiten in dieser Aufgabe.</p>
+  <p><a class="knopf haupt" href="{{ url_for('seiten.hochladen', aufgabe_id=aufgabe.id) }}">Fotos hochladen und zuordnen</a></p>
+</div>
+{% endif %}
+
+<section class="hinzufuegen" aria-labelledby="hinzufuegen-titel">
+  <h2 id="hinzufuegen-titel">Arbeit hinzufügen</h2>
+  <p class="leise">Alle ausgewählten Fotos bilden zusammen eine Arbeit, die Seiten in der Reihenfolge der Dateinamen. Die Analyse startet sofort.</p>
+  <form method="post" enctype="multipart/form-data"
+        action="{{ url_for('seiten.arbeit_hinzufuegen', aufgabe_id=aufgabe.id) }}">
+    <label class="nur-vorlesen" for="arbeitsfotos">Fotos der Arbeit</label>
+    <input id="arbeitsfotos" name="fotos" type="file" multiple required accept="image/jpeg,image/png,image/webp">
+    <button class="knopf" type="submit">Als eine Arbeit hinzufügen</button>
+  </form>
+</section>
+{% endblock %}
+{% block skripte %}
+<script type="application/json" id="stapel-daten">{{ daten|tojson }}</script>
+<script src="{{ url_for('static', filename='stapel.js') }}"></script>
 {% endblock %}

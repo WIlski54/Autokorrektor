@@ -441,3 +441,133 @@ def test_arbeit_hinzufuegen_ohne_schluessel_legt_nichts_an(client, speicher, sch
     antwort = _arbeit_hinzufuegen(client, nr, ("1.jpg", _bild()), follow_redirects=True)
     assert "OPENAI_API_KEY" in _text(antwort)
     assert speicher.arbeiten(nr) == [] and schein.aufrufe == []
+
+
+def test_arbeit_hinzufuegen_ordnet_seiten_nach_dateinamen(client, speicher, schlange):
+    nr = _aufgabe(speicher)
+    _arbeit_hinzufuegen(client, nr, ("Foto 10.jpg", _bild((100, 50))),
+                        ("foto 9.jpg", _bild((90, 50))))
+    schlange.warten(5)
+    (arbeit,) = speicher.arbeiten(nr)
+    assert [s["breite"] for s in arbeit["seiten"]] == [90, 100]
+
+
+# --- Task 9: Stapelansicht ----------------------------------------------------------------
+
+def _zwei_arbeiten(speicher):
+    """Aufgabe mit Arbeit 01 (zwei Seiten) und Arbeit 02 (eine Seite); gibt (nr, seiten) zurück."""
+    nr = _aufgabe(speicher)
+    seiten = speicher.arbeit_anlegen(nr, [("1.jpg", _bild()), ("2.jpg", _bild())])
+    seiten += speicher.arbeit_anlegen(nr, [("3.jpg", _bild())])
+    return nr, seiten
+
+
+def _daten(text, kennung):
+    anfang = text.index(f'<script type="application/json" id="{kennung}">')
+    return json.loads(text[text.index(">", anfang) + 1:text.index("</script>", anfang)])
+
+
+def test_stand_liefert_arbeiten_mit_seiten(client, speicher, schlange, schein):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    schlange.einreihen(s1)
+    assert schlange.warten(5) is True
+    speicher.seite_status(s2, "fehlgeschlagen", fehlermeldung="Dienst nicht erreichbar")
+    antwort = client.get(f"/aufgabe/{nr}/stand")
+    assert antwort.status_code == 200
+    stand = antwort.get_json()
+    erste, zweite = stand["arbeiten"]
+    assert erste["kuerzel"] == "01" and erste["seitenzahl"] == 2
+    assert erste["status_gesamt"] == "fehlgeschlagen" and erste["offen"] == 1
+    assert erste["seiten"] == [
+        {"id": s1, "nummer": 1, "status": "fertig", "fehlermeldung": None},
+        {"id": s2, "nummer": 2, "status": "fehlgeschlagen",
+         "fehlermeldung": "Dienst nicht erreichbar"}]
+    assert zweite["kuerzel"] == "02" and zweite["seitenzahl"] == 1
+    assert zweite["status_gesamt"] == "neu" and zweite["offen"] == 0
+    assert zweite["seiten"] == [{"id": s3, "nummer": 1, "status": "neu", "fehlermeldung": None}]
+    assert stand["gesamt"] == {"seiten": 3, "fertig": 1, "fehlgeschlagen": 1, "unterwegs": 0,
+                               "offen": 1}
+    assert stand["aktiv"] is False
+
+
+def test_stand_ist_aktiv_solange_etwas_wartet_oder_laeuft(client, speicher, schlange, schein):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    schein.frei.clear()
+    schlange.einreihen(s3)
+    stand = client.get(f"/aufgabe/{nr}/stand").get_json()
+    assert stand["aktiv"] is True and stand["gesamt"]["unterwegs"] == 1
+    assert stand["arbeiten"][1]["status_gesamt"] == "laeuft"
+    schein.frei.set()
+    assert schlange.warten(5) is True
+    stand = client.get(f"/aufgabe/{nr}/stand").get_json()
+    assert stand["aktiv"] is False and stand["arbeiten"][1]["status_gesamt"] == "fertig"
+
+
+def test_stand_unbekannte_aufgabe_ergibt_404(client):
+    assert client.get("/aufgabe/999/stand").status_code == 404
+
+
+def test_erneut_reiht_fehlgeschlagene_seite_neu_ein(client, speicher, schlange, schein):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    speicher.seite_status(s1, "fehlgeschlagen", fehlermeldung="Zeitüberschreitung")
+    antwort = client.post(f"/seite/{s1}/erneut")
+    assert antwort.status_code == 200 and antwort.get_json() == {"ok": True}
+    assert schlange.warten(5) is True
+    assert schein.aufrufe == [s1]
+    seite = speicher.seite(s1)
+    assert seite["analyse_status"] == "fertig" and seite["fehlermeldung"] is None
+
+
+def test_erneut_lehnt_fertige_und_unbekannte_seite_ab(client, speicher, schlange, schein):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    speicher.seite_status(s1, "fertig")
+    antwort = client.post(f"/seite/{s1}/erneut")
+    assert antwort.status_code == 409 and antwort.get_json()["fehler"]
+    assert client.post(f"/seite/{s2}/erneut").status_code == 409  # neu, nicht fehlgeschlagen
+    assert client.post("/seite/999/erneut").status_code == 404
+    assert schlange.warten(1) is True and schein.aufrufe == []
+    assert speicher.seite(s1)["analyse_status"] == "fertig"
+
+
+def test_erneut_ohne_schluessel_reiht_nichts_ein(client, speicher, schein, monkeypatch):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    speicher.seite_status(s1, "fehlgeschlagen", fehlermeldung="x")
+    monkeypatch.delenv("GEMINI_API_KEY")
+    antwort = client.post(f"/seite/{s1}/erneut")
+    assert antwort.status_code == 409 and "GEMINI_API_KEY" in antwort.get_json()["fehler"]
+    assert schein.aufrufe == [] and speicher.seite(s1)["analyse_status"] == "fehlgeschlagen"
+
+
+def test_stapelansicht_zeigt_kacheln(client, speicher, schlange):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    schlange.einreihen(s3)
+    assert schlange.warten(5) is True
+    speicher.seite_status(s2, "fehlgeschlagen", fehlermeldung="Dienst <b>weg</b>")
+    antwort = client.get(f"/aufgabe/{nr}")
+    text = _text(antwort)
+    assert antwort.status_code == 200
+    arbeiten = speicher.arbeiten(nr)
+    for arbeit in arbeiten:
+        assert f'href="/arbeit/{arbeit["id"]}"' in text
+    assert f'src="/bild/seite/{s1}?b=300"' in text and f'src="/bild/seite/{s3}?b=300"' in text
+    assert "Arbeit 01" in text and "Arbeit 02" in text and "2 Seiten" in text
+    assert "Dienst &lt;b&gt;weg&lt;/b&gt;" in text and "<b>weg</b>" not in text
+    assert "Erneut versuchen" in text and f'data-seite="{s2}"' in text
+    assert "1 offener Vorschlag" in text
+    assert "Arbeit hinzufügen" in text and f'action="/aufgabe/{nr}/arbeit"' in text
+    daten = _daten(text, "stapel-daten")
+    assert daten["url_stand"] == f"/aufgabe/{nr}/stand" and daten["aktiv"] is False
+    assert "1 von 3 Seiten analysiert" in text
+
+
+def test_leere_stapelansicht_fuehrt_zum_hochladen(client, speicher):
+    nr = _aufgabe(speicher)
+    text = _text(client.get(f"/aufgabe/{nr}"))
+    assert "Noch keine Arbeiten" in text and f'href="/aufgabe/{nr}/hochladen"' in text
+
+
+def test_stapelansicht_weist_auf_fotos_in_der_ablage_hin(client, speicher):
+    nr = _aufgabe(speicher)
+    assert "noch nicht zugeordnet" not in _text(client.get(f"/aufgabe/{nr}"))
+    _ablage_fuellen(speicher, nr, 2)
+    assert "2 Fotos sind noch nicht zugeordnet" in _text(client.get(f"/aufgabe/{nr}"))
