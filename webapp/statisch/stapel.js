@@ -40,6 +40,15 @@
       marke.className = arbeit.bestaetigt_am ? "status status-fertig" : "leise";
       marke.textContent = arbeit.bestaetigt_am ? "Korrektur bestätigt" : "Korrektur noch nicht bestätigt";
       bestaetigt.appendChild(marke);
+      if (arbeit.bestaetigt_am) {  // nur bestätigte Arbeiten lassen sich ausgeben
+        var pdf = document.createElement("a");
+        pdf.className = "pdf-verweis";
+        pdf.href = daten.url_pdf.replace("/0/", "/" + Number(arbeit.id) + "/");
+        pdf.textContent = "PDF";
+        pdf.setAttribute("aria-label", "PDF der Arbeit " + arbeit.kuerzel + " ausgeben");
+        bestaetigt.appendChild(document.createTextNode(" "));
+        bestaetigt.appendChild(pdf);
+      }
     }
 
     var liste = kachel.querySelector('[data-rolle="fehler"]');
@@ -81,7 +90,25 @@
     if (g.offen) { teile.push(vorschlaege(g.offen)); }
     teile.push(g.bestaetigt + " von " + g.arbeiten + " Arbeiten bestätigt");
     gesamttext.textContent = teile.join(" · ");
+    sammelKnopfStellen(g);
     return true;
+  }
+
+  // Das Sammel-PDF enthält nur bestätigte Arbeiten; ohne eine solche hat der Knopf kein Ziel.
+  function sammelKnopfStellen(g) {
+    var knopf = document.getElementById("sammel-knopf");
+    if (!knopf) { return; }
+    document.getElementById("sammel-zahl").textContent =
+      g.bestaetigt + " von " + g.arbeiten + " bestätigt";
+    if (g.bestaetigt > 0) {
+      knopf.setAttribute("href", knopf.getAttribute("data-url"));
+      knopf.removeAttribute("aria-disabled");
+      knopf.removeAttribute("title");
+    } else {
+      knopf.removeAttribute("href");
+      knopf.setAttribute("aria-disabled", "true");
+      knopf.setAttribute("title", "Noch ist keine Korrektur bestätigt.");
+    }
   }
 
   // Es läuft immer nur eine Abfrage: So kann keine ältere Antwort eine neuere überschreiben.

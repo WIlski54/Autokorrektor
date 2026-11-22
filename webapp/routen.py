@@ -1,4 +1,4 @@
-"""Alle Seiten und JSON-Schnittstellen der Etappen 1 und 2."""
+"""Alle Seiten und JSON-Schnittstellen der Etappen 1 bis 3."""
 import math
 import re
 import time
@@ -8,12 +8,12 @@ from flask import (Blueprint, Response, abort, current_app, flash, redirect, ren
                    request, url_for)
 from werkzeug.exceptions import HTTPException
 
-from webapp import regeln
+from webapp import ausgabe, regeln, uebersicht
 from webapp.verfahren import VERFAHREN, VOREINSTELLUNG, anzeigename, hindernis
 
 seiten = Blueprint("seiten", __name__)
 
-KATEGORIEN = (("R", "Rechtschreibung"), ("Z", "Zeichensetzung"), ("Gr", "Grammatik"))
+KATEGORIEN = uebersicht.FESTE_KATEGORIEN
 EIGENE_HOSTS = ("127.0.0.1", "localhost")
 VORSCHLAG_LAENGE = 200  # Zeichen; mehr passt in keine Randspalte
 ZEICHEN_FELDER = ("id", "seite_id", "kategorie", "typ", "x", "y", "breite", "hoehe", "gelesen",
@@ -217,6 +217,7 @@ def stapel(aufgabe_id):
     daten = {
         "url_stand": url_for("seiten.stand", aufgabe_id=aufgabe_id),
         "url_erneut": url_for("seiten.seite_erneut", seite_id=0),
+        "url_pdf": url_for("seiten.arbeit_pdf", arbeit_id=0),  # die 0 ersetzt das Skript
         "aktiv": stand["aktiv"],
         "statustext": STATUSTEXT,
     }
@@ -588,6 +589,77 @@ def seite_neu_analysieren(seite_id):
             break
         time.sleep(0.02)
     return _antwort(arbeit_id)
+
+
+# --- Ausgabe und Stapelübersicht (Etappe 3) -----------------------------------------------
+#
+# Ausgegeben werden nur Arbeiten, deren Korrektur insgesamt bestätigt ist. Die Antworten
+# sind Downloads und werden nie zwischengespeichert: Sie zeigen den Stand der Korrektur.
+
+def _dateiname(*teile, endung):
+    """Ein Dateiname nur aus Buchstaben, Ziffern, Bindestrich und Unterstrich.
+
+    Alles andere wird zu einem Unterstrich; Teile, von denen nichts bleibt, entfallen.
+    """
+    sauber = [re.sub(r"_+", "_", re.sub(r"[^\w-]", "_", teil)).strip("_") for teil in teile]
+    return "-".join(teil for teil in sauber if teil) + "." + endung
+
+
+def _download(daten, mimetype, dateiname):
+    antwort = Response(daten, mimetype=mimetype)
+    antwort.headers.set("Content-Disposition", "attachment", filename=dateiname)
+    antwort.headers["Cache-Control"] = "no-store"
+    return antwort
+
+
+def _nicht_ausgebbar(fehler, zurueck, zurueck_text):
+    """Die Fehlerseite, wenn sich (noch) nichts ausgeben lässt: 409 mit dem Weg zurück."""
+    return render_template("fehler.html", text=str(fehler), code=409, zurueck=zurueck,
+                           zurueck_text=zurueck_text), 409
+
+
+@seiten.get("/arbeit/<int:arbeit_id>/pdf")
+def arbeit_pdf(arbeit_id):
+    """Das PDF einer bestätigten Arbeit als Download; nicht bestätigt ergibt 409."""
+    arbeit = _speicher().arbeit(arbeit_id)
+    if arbeit is None:
+        abort(404)
+    try:
+        pdf = ausgabe.arbeit_als_pdf(_speicher(), arbeit_id)
+    except regeln.RegelFehler as fehler:
+        return _nicht_ausgebbar(fehler, url_for("seiten.arbeit", arbeit_id=arbeit_id),
+                                "Zurück zur Korrektur der Arbeit")
+    return _download(pdf, "application/pdf", _dateiname("Arbeit", arbeit["kuerzel"], endung="pdf"))
+
+
+@seiten.get("/aufgabe/<int:aufgabe_id>/pdf")
+def aufgabe_pdf(aufgabe_id):
+    """Das Sammel-PDF aller bestätigten Arbeiten; ohne bestätigte Arbeit 409."""
+    aufgabe = _aufgabe_oder_404(aufgabe_id)
+    try:
+        pdf, _, _ = ausgabe.aufgabe_als_pdf(_speicher(), aufgabe_id)
+    except regeln.RegelFehler as fehler:
+        return _nicht_ausgebbar(fehler, url_for("seiten.stapel", aufgabe_id=aufgabe_id),
+                                "Zurück zum Stapel")
+    return _download(pdf, "application/pdf", _dateiname(aufgabe["titel"], "Sammel", endung="pdf"))
+
+
+@seiten.get("/aufgabe/<int:aufgabe_id>/uebersicht")
+def stapeluebersicht(aufgabe_id):
+    """Die Stapelübersicht: Zeichen je Kategorie, häufige Fehlerwörter, Tabelle je Arbeit."""
+    aufgabe = _aufgabe_oder_404(aufgabe_id)
+    return render_template("uebersicht.html", aufgabe=aufgabe,
+                           daten=uebersicht.stapel(_speicher(), aufgabe_id),
+                           feste=[kuerzel for kuerzel, _ in KATEGORIEN])
+
+
+@seiten.get("/aufgabe/<int:aufgabe_id>/uebersicht.csv")
+def stapeluebersicht_csv(aufgabe_id):
+    """Die Tabelle je Arbeit als CSV; UTF-8 mit BOM, damit Excel Umlaute richtig liest."""
+    aufgabe = _aufgabe_oder_404(aufgabe_id)
+    inhalt = uebersicht.als_csv(uebersicht.stapel(_speicher(), aufgabe_id))
+    return _download(inhalt.encode("utf-8-sig"), "text/csv; charset=utf-8",
+                     _dateiname(aufgabe["titel"], "Uebersicht", endung="csv"))
 
 
 # --- Einstellungen: eigene Kürzel ---------------------------------------------------------

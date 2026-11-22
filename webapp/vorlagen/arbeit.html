@@ -138,6 +138,13 @@
   <div class="leistenteil">
     <span class="leise" id="gesamt-grund"></span>
     <button class="knopf haupt" type="button" id="gesamt-knopf" aria-describedby="gesamt-grund">Korrektur gesamt bestätigen</button>
+    {# Ausgegeben wird nur eine bestätigte Arbeit; das Skript hält den Knopf auf dem Stand. #}
+    <span class="pdf-ausgabe">
+      <a class="knopf" id="pdf-knopf" data-url="{{ url_for('seiten.arbeit_pdf', arbeit_id=arbeit.id) }}"
+         {%- if arbeit.bestaetigt_am %} href="{{ url_for('seiten.arbeit_pdf', arbeit_id=arbeit.id) }}"
+         {%- else %} aria-disabled="true"{% endif %} aria-describedby="pdf-hinweis">PDF ausgeben</a>
+      <span class="leise" id="pdf-hinweis"{{ ' hidden' if arbeit.bestaetigt_am }}>erst nach der Gesamtbestätigung</span>
+    </span>
   </div>
 </div>
 

@@ -281,6 +281,25 @@ progress { height: .5rem; accent-color: var(--akzent); }
 }
 .fehlerliste li span { display: block; margin-bottom: .4rem; }
 
+.pdf-verweis { margin-left: .4rem; font-size: .85rem; font-weight: 600; }
+
+/* --- Stapelübersicht --- */
+
+.zahlkarten { list-style: none; display: flex; flex-wrap: wrap; gap: .75rem; margin: 0; padding: 0; }
+.zahlkarte {
+  display: grid; grid-template-columns: auto 1fr; gap: .1rem .6rem; align-items: center;
+  min-width: 11rem; padding: .7rem .9rem;
+  background: var(--flaeche); border: 1px solid var(--linie); border-left: 4px solid var(--farbe);
+  border-radius: var(--rund); box-shadow: var(--schatten);
+}
+.zahlkarte-name { color: var(--leise); font-size: .9rem; }
+.zahlkarte-zahl { grid-column: 1 / -1; font-size: 1.6rem; font-weight: 600; line-height: 1.2;
+  font-variant-numeric: tabular-nums; }
+.tabelle.schmal { width: auto; min-width: min(34rem, 100%); }
+.tabelle thead th.zahl { text-align: right; }
+.tabelle thead .kuerzel { text-decoration: none; cursor: help; }
+.tabellenhinweis { margin: .5rem 0 0; }
+
 .hinzufuegen {
   margin-top: 2.5rem; padding: 1.1rem 1.25rem;
   background: var(--flaeche); border: 1px solid var(--linie); border-radius: var(--rund);
@@ -425,6 +444,8 @@ kbd {
 .fussleiste.korrekturleiste { margin-top: .75rem; padding: .6rem .9rem; }
 .leistenteil { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 .fussleiste.korrekturleiste .leise { margin: 0; max-width: 24rem; text-align: right; }
+.pdf-ausgabe { display: inline-flex; align-items: center; gap: .5rem; }
+.pdf-ausgabe .leise[hidden] { display: none; }
 
 .dialog {
   width: min(34rem, calc(100vw - 2rem)); padding: 1.5rem;

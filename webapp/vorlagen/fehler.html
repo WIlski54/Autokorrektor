@@ -3,5 +3,8 @@
 {% block inhalt %}
 <h1>Das hat nicht geklappt</h1>
 <p class="meldung fehler" role="alert">{{ text }}</p>
-<p><a class="knopf" href="{{ url_for('seiten.aufgaben') }}">Zur Aufgabenliste</a></p>
+<p class="knopfreihe">
+  {% if zurueck %}<a class="knopf haupt" href="{{ zurueck }}">{{ zurueck_text }}</a>{% endif %}
+  <a class="knopf" href="{{ url_for('seiten.aufgaben') }}">Zur Aufgabenliste</a>
+</p>
 {% endblock %}

@@ -664,6 +664,21 @@
     // Solange eine Seite der Arbeit nicht fertig analysiert ist, wird nichts gesammelt bestätigt.
     $("rest-knopf").disabled = gesperrt || fragt || arbeit.offen === 0 || seiteUnfertig();
     $("neu-analyse-knopf").disabled = seitenstatus !== "fertig" && seitenstatus !== "fehlgeschlagen";
+    pdfKnopfZeigen(bestaetigt);
+  }
+
+  // „PDF ausgeben“ führt nur zum PDF, solange die Korrektur bestätigt ist. Verfällt die
+  // Bestätigung, verliert der Knopf sofort sein Ziel.
+  function pdfKnopfZeigen(bestaetigt) {
+    var knopf = $("pdf-knopf");
+    if (bestaetigt) {
+      knopf.setAttribute("href", knopf.getAttribute("data-url"));
+      knopf.removeAttribute("aria-disabled");
+    } else {
+      knopf.removeAttribute("href");
+      knopf.setAttribute("aria-disabled", "true");
+    }
+    $("pdf-hinweis").hidden = bestaetigt;
   }
 
   // Übernimmt den Stand der Arbeit aus einer Antwort. Maßgeblich ist der Änderungszähler des

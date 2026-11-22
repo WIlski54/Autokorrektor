@@ -9,6 +9,13 @@
     <p class="leise unterzeile">{{ aufgabe.fach }}, Jahrgang {{ aufgabe.jahrgang }} · prüft {{ aufgabe.kategorien|join(', ') }} · {{ anzeigename(aufgabe.verfahren) }}</p>
   </div>
   <div class="knopfreihe oben">
+    {% if stand.arbeiten %}
+    {# Das Sammel-PDF enthält nur bestätigte Arbeiten; das Skript hält Zahl und Ziel auf dem Stand. #}
+    <a class="knopf" id="sammel-knopf" data-url="{{ url_for('seiten.aufgabe_pdf', aufgabe_id=aufgabe.id) }}"
+       {%- if g.bestaetigt %} href="{{ url_for('seiten.aufgabe_pdf', aufgabe_id=aufgabe.id) }}"
+       {%- else %} aria-disabled="true" title="Noch ist keine Korrektur bestätigt."{% endif %}><span>Sammel-PDF (<span id="sammel-zahl">{{ g.bestaetigt }} von {{ g.arbeiten }} bestätigt</span>)</span></a>
+    <a class="knopf" href="{{ url_for('seiten.stapeluebersicht', aufgabe_id=aufgabe.id) }}">Stapelübersicht</a>
+    {% endif %}
     <a class="knopf" href="{{ url_for('seiten.aufgabe_bearbeiten', aufgabe_id=aufgabe.id) }}">Einstellungen</a>
     <a class="knopf{{ '' if stand.arbeiten else ' haupt' }}" href="{{ url_for('seiten.hochladen', aufgabe_id=aufgabe.id) }}">Fotos hochladen</a>
   </div>
@@ -53,6 +60,7 @@
       </p>
       <p data-rolle="bestaetigt">
         {%- if a.bestaetigt_am %}<span class="status status-fertig">Korrektur bestätigt</span>
+        <a class="pdf-verweis" href="{{ url_for('seiten.arbeit_pdf', arbeit_id=a.id) }}" aria-label="PDF der Arbeit {{ a.kuerzel }} ausgeben">PDF</a>
         {%- elif a.status_gesamt == 'fertig' %}<span class="leise">Korrektur noch nicht bestätigt</span>
         {%- endif -%}
       </p>

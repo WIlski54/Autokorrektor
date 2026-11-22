@@ -1,0 +1,111 @@
+{% extends "grundriss.html" %}
+{% block titel %}Stapelübersicht – {{ aufgabe.titel }}{% endblock %}
+{% block krumen %}
+<li><a href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">{{ aufgabe.titel }}</a></li>
+<li aria-current="page">Stapelübersicht</li>
+{% endblock %}
+{% macro farbklasse(kuerzel) -%}
+  {{ 'kat-' ~ kuerzel if kuerzel in feste else 'kat-hand' }}
+{%- endmacro %}
+{% block inhalt %}
+<div class="titelzeile">
+  <div>
+    <h1>Stapelübersicht</h1>
+    <p class="leise unterzeile">{{ aufgabe.titel }} · {{ aufgabe.fach }}, Jahrgang {{ aufgabe.jahrgang }}</p>
+  </div>
+  <div class="knopfreihe oben">
+    {% if daten.arbeiten %}
+    <a class="knopf" href="{{ url_for('seiten.stapeluebersicht_csv', aufgabe_id=aufgabe.id) }}">Als CSV speichern</a>
+    {% endif %}
+    <a class="knopf" href="{{ url_for('seiten.stapel', aufgabe_id=aufgabe.id) }}">Zurück zum Stapel</a>
+  </div>
+</div>
+
+<p class="meldung" role="status">
+  <strong>{{ daten.arbeiten_bestaetigt }} von {{ daten.arbeiten_gesamt }} Arbeiten bestätigt.</strong>
+  In die Übersicht fließen nur Arbeiten ein, deren Korrektur insgesamt bestätigt ist, und aus
+  ihnen nur die bestätigten Zeichen.
+</p>
+
+{% if not daten.arbeiten %}
+<div class="leer">
+  <p>Noch ist keine Korrektur bestätigt.</p>
+  <p class="leise">Sobald die Korrektur einer Arbeit insgesamt bestätigt ist, erscheinen ihre Zeichen hier.</p>
+</div>
+{% else %}
+<section aria-labelledby="kategorien-titel">
+  <h2 id="kategorien-titel">Zeichen je Kategorie</h2>
+  {% if daten.kategorien %}
+  <ul class="zahlkarten">
+    {% for k in daten.kategorien %}
+    <li class="zahlkarte {{ farbklasse(k.kuerzel) }}">
+      <span class="kuerzel">{{ k.kuerzel }}</span>
+      <span class="zahlkarte-name">{{ k.bezeichnung or 'ohne Bezeichnung' }}</span>
+      <span class="zahlkarte-zahl">{{ k.anzahl }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="leise">In den bestätigten Arbeiten steht kein Zeichen.</p>
+  {% endif %}
+</section>
+
+<section aria-labelledby="woerter-titel">
+  <h2 id="woerter-titel">Häufig falsch geschriebene Wörter</h2>
+  {% if daten.woerter %}
+  <table class="tabelle schmal">
+    <thead>
+      <tr>
+        <th scope="col">geschrieben</th>
+        <th scope="col">richtig</th>
+        <th scope="col" class="zahl">wie oft</th>
+        <th scope="col" class="zahl">in Arbeiten</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in daten.woerter %}
+      <tr>
+        <th scope="row"><span class="kat-R gelesen">{{ w.gelesen }}</span></th>
+        <td>{{ w.vorschlag or '–' }}</td>
+        <td class="zahl">{{ w.anzahl }}</td>
+        <td class="zahl">{{ w.arbeiten }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="leise tabellenhinweis">Rechtschreibzeichen, die mindestens zweimal oder in zwei Arbeiten vorkommen; Groß- und Kleinschreibung zusammengefasst; höchstens 20 Einträge.</p>
+  {% else %}
+  <p class="leise">Kein falsch geschriebenes Wort kommt mindestens zweimal oder in zwei Arbeiten vor.</p>
+  {% endif %}
+</section>
+
+<section aria-labelledby="arbeiten-titel">
+  <h2 id="arbeiten-titel">Zeichen je Arbeit</h2>
+  <table class="tabelle">
+    <thead>
+      <tr>
+        <th scope="col">Arbeit</th>
+        <th scope="col" class="zahl">Seiten</th>
+        {% for k in daten.kategorien %}
+        <th scope="col" class="zahl {{ farbklasse(k.kuerzel) }}"><abbr class="kuerzel" title="{{ k.bezeichnung }}">{{ k.kuerzel }}</abbr></th>
+        {% endfor %}
+        <th scope="col" class="zahl">Summe</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in daten.arbeiten %}
+      <tr>
+        <th scope="row">{{ a.kuerzel }}</th>
+        <td class="zahl">{{ a.seiten }}</td>
+        {% for k in daten.kategorien %}
+        <td class="zahl">{{ a.je_kategorie[k.kuerzel] }}</td>
+        {% endfor %}
+        <td class="zahl">{{ a.summe }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="leise tabellenhinweis">Die Arbeiten stehen in der Reihenfolge des Stapels. Die Zahlen beschreiben die gesetzten Zeichen; sie sind keine Bewertung.</p>
+</section>
+{% endif %}
+{% endblock %}
