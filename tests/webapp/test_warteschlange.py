@@ -212,6 +212,7 @@ def test_wiederaufnehmen_reiht_unfertige_seiten_neu_ein(speicher):
     speicher.seite_lauf_beginnen(laeuft)  # Zustand nach einem Abbruch der App
     speicher.seite_status(wartet, "wartet")
     speicher.seite_status(fertig, "fertig")
+    speicher.seite_status(neu, "neu")
     aufrufe = []
 
     def analysieren(nr):
@@ -226,6 +227,78 @@ def test_wiederaufnehmen_reiht_unfertige_seiten_neu_ein(speicher):
     assert speicher.seite(laeuft)["lauf"] == 2
     assert speicher.seite(wartet)["analyse_status"] == "fertig"
     assert speicher.seite(neu)["analyse_status"] == "neu"
+
+
+def test_angelegte_aber_nie_eingereihte_seite_wird_nach_abbruch_aufgenommen(speicher):
+    # Die App bricht zwischen dem Anlegen der Arbeit und dem Einreihen ab.
+    (seite_id,) = _seiten(speicher)
+    assert speicher.seite(seite_id)["analyse_status"] == "wartet"
+    aufrufe = []
+    schlange = Warteschlange(speicher, lambda nr: aufrufe.append(nr) or _ergebnis())
+    schlange.wiederaufnehmen()
+    assert schlange.warten(5)
+    assert aufrufe == [seite_id] and speicher.seite(seite_id)["analyse_status"] == "fertig"
+
+
+def test_einreihen_uebergeht_seite_mit_status_wartet_nicht(speicher):
+    # „Steht schon an“ meint diese Warteschlange, nicht den Status in der Datenbank.
+    (seite_id,) = _seiten(speicher)
+    speicher.seite_status(seite_id, "wartet")
+    aufrufe = []
+    schlange = Warteschlange(speicher, lambda nr: aufrufe.append(nr) or _ergebnis())
+    schlange.einreihen(seite_id)
+    assert schlange.warten(5)
+    assert aufrufe == [seite_id] and speicher.seite(seite_id)["analyse_status"] == "fertig"
+
+
+def test_wiederaufnehmen_setzt_seiten_mit_hindernis_auf_fehlgeschlagen(speicher):
+    geht, geht_nicht = _seiten(speicher, 2)
+    aufrufe = []
+    schlange = Warteschlange(speicher, lambda nr: aufrufe.append(nr) or _ergebnis())
+    schlange.wiederaufnehmen(
+        hindernis=lambda nr: "Der Schlüssel fehlt." if nr == geht_nicht else None)
+    assert schlange.warten(5)
+    assert aufrufe == [geht] and speicher.seite(geht)["analyse_status"] == "fertig"
+    seite = speicher.seite(geht_nicht)
+    assert seite["analyse_status"] == "fehlgeschlagen"
+    assert seite["fehlermeldung"] == "Der Schlüssel fehlt." and seite["lauf"] == 0
+
+
+def test_ergebnis_eines_veralteten_laufs_wird_protokolliert(speicher, caplog):
+    (seite_id,) = _seiten(speicher)
+
+    def analysieren(nr):
+        speicher.seite_lauf_beginnen(nr)  # inzwischen hat ein anderer Lauf begonnen
+        return _ergebnis()
+
+    schlange = Warteschlange(speicher, analysieren)
+    with caplog.at_level("WARNING", logger="webapp.warteschlange"):
+        schlange.einreihen(seite_id)
+        assert schlange.warten(5)
+    assert _zeichen_der_seite(speicher, seite_id) == []
+    assert speicher.seite(seite_id)["analyse_status"] == "laeuft"
+    (eintrag,) = [e for e in caplog.records if e.name == "webapp.warteschlange"]
+    assert "veraltet" in eintrag.getMessage() and str(seite_id) in eintrag.getMessage()
+
+
+def test_ergebnis_nach_dem_beenden_wird_nicht_mehr_geschrieben(speicher):
+    (seite_id,) = _seiten(speicher)
+    begonnen, frei = threading.Event(), threading.Event()
+
+    def analysieren(nr):
+        begonnen.set()
+        frei.wait(5)
+        return _ergebnis()
+
+    schlange = Warteschlange(speicher, analysieren)
+    schlange.einreihen(seite_id)
+    assert begonnen.wait(5)
+    schlange.beenden()
+    frei.set()  # das Ergebnis trifft ein, bevor der Arbeiter das Ende bemerkt hat
+    schlange._arbeiter.shutdown(wait=True)  # der Arbeiter ist durch
+    assert speicher.seite(seite_id)["analyse_status"] == "laeuft"
+    assert _zeichen_der_seite(speicher, seite_id) == []
+    assert speicher.seiten_unfertig() == [seite_id]
 
 
 def test_geloeschte_seite_wird_uebersprungen(speicher):

@@ -192,7 +192,8 @@ def test_ablage_ordnen_aendert_reihenfolge_und_trennmarken_und_loescht(speicher)
     nr = _aufgabe(speicher)
     a, b, c = (speicher.bild_ablegen(nr, f"{i}.jpg", _bild()) for i in range(3))
     datei_b = next(e["bilddatei"] for e in speicher.ablage(nr) if e["id"] == b)
-    speicher.ablage_ordnen(nr, [{"id": c, "neue_arbeit": True}, {"id": a, "neue_arbeit": False}])
+    speicher.ablage_ordnen(nr, [{"id": c, "neue_arbeit": True}, {"id": a, "neue_arbeit": False}],
+                           entfernt=[b])
     eintraege = speicher.ablage(nr)
     assert [(e["id"], e["neue_arbeit"]) for e in eintraege] == [(c, True), (a, False)]
     assert not speicher.bildpfad(datei_b).exists()
@@ -203,11 +204,29 @@ def test_ablage_ordnen_beruehrt_andere_aufgaben_nicht(speicher):
     eins, zwei = _aufgabe(speicher), _aufgabe(speicher)
     speicher.bild_ablegen(eins, "a.jpg", _bild())
     b = speicher.bild_ablegen(zwei, "b.jpg", _bild())
-    speicher.ablage_ordnen(eins, [{"id": b, "neue_arbeit": False}])
-    assert speicher.ablage(eins) == []
+    speicher.ablage_ordnen(eins, [{"id": b, "neue_arbeit": False}], entfernt=[b])
+    assert len(speicher.ablage(eins)) == 1
     (fremd,) = speicher.ablage(zwei)
     assert fremd["id"] == b and fremd["neue_arbeit"] is True
-    assert _bilddateien(speicher) == [fremd["bilddatei"]]
+    assert len(_bilddateien(speicher)) == 2
+
+
+def test_ablage_ordnen_behaelt_ungenannte_fotos_und_haengt_sie_hinten_an(speicher):
+    nr = _aufgabe(speicher)
+    a, b, c, d = (speicher.bild_ablegen(nr, f"{i}.jpg", _bild()) for i in range(4))
+    speicher.ablage_ordnen(nr, [{"id": a, "neue_arbeit": True}, {"id": b, "neue_arbeit": False},
+                                {"id": c, "neue_arbeit": False}, {"id": d, "neue_arbeit": True}])
+    # Ein anderes Fenster kennt nur d und a: b und c bleiben, in bisheriger Reihenfolge, hinten.
+    speicher.ablage_ordnen(nr, [{"id": d, "neue_arbeit": True}, {"id": a, "neue_arbeit": False}])
+    assert [(e["id"], e["neue_arbeit"]) for e in speicher.ablage(nr)] == [
+        (d, True), (a, False), (b, False), (c, False)]
+    assert [e["reihenfolge"] for e in speicher.ablage(nr)] == [1, 2, 3, 4]
+    assert len(_bilddateien(speicher)) == 4
+    speicher.ablage_ordnen(nr, [])  # ohne `entfernt` wird nie gelöscht
+    assert [e["id"] for e in speicher.ablage(nr)] == [d, a, b, c]
+    speicher.ablage_ordnen(nr, [{"id": c, "neue_arbeit": True}], entfernt=[d, 999])
+    assert [e["id"] for e in speicher.ablage(nr)] == [c, a, b]
+    assert len(_bilddateien(speicher)) == 3
 
 
 def test_ablage_zu_arbeiten_bildet_arbeiten_nach_trennmarken(speicher):
@@ -224,7 +243,8 @@ def test_ablage_zu_arbeiten_bildet_arbeiten_nach_trennmarken(speicher):
     assert [s["id"] for s in alle] == seiten
     assert [s["bilddatei"] for s in alle] == dateien
     assert [s["breite"] for s in alle] == [60, 61, 62, 63, 64]
-    assert {s["analyse_status"] for s in alle} == {"neu"}
+    assert {s["analyse_status"] for s in alle} == {"wartet"}  # ein Neustart findet sie wieder
+    assert speicher.seiten_unfertig() == seiten
     assert {s["lauf"] for s in alle} == {0}
     assert speicher.ablage(nr) == []
     assert len(_bilddateien(speicher)) == 5
@@ -251,7 +271,8 @@ def test_arbeit_anlegen_setzt_nummerierung_fort(speicher):
     assert [s["nummer"] for s in arbeiten[-1]["seiten"]] == [1, 2]
     seite = speicher.seite(seiten[0])
     assert (seite["breite"], seite["hoehe"]) == (30, 50)
-    assert seite["arbeit_id"] == arbeiten[-1]["id"] and seite["analyse_status"] == "neu"
+    assert seite["arbeit_id"] == arbeiten[-1]["id"] and seite["analyse_status"] == "wartet"
+    assert set(seiten) <= set(speicher.seiten_unfertig())
     # Auch eine spätere Ablage zählt weiter.
     speicher.bild_ablegen(nr, "c.jpg", _bild())
     speicher.ablage_zu_arbeiten(nr)
@@ -279,6 +300,15 @@ def test_arbeit_und_seite_lesen(speicher):
     assert [s["id"] for s in arbeit["seiten"]] == [seite_id]
     assert arbeit["seiten"][0]["zeichen"] == []
     assert speicher.arbeit(999) is None and speicher.seite(999) is None
+
+
+def test_aufgabe_zur_seite(speicher):
+    nr, andere = _aufgabe(speicher, titel="A"), _aufgabe(speicher, titel="B")
+    (seite_id,) = speicher.arbeit_anlegen(nr, [("a.jpg", _bild())])
+    (fremd,) = speicher.arbeit_anlegen(andere, [("b.jpg", _bild())])
+    assert speicher.aufgabe_zur_seite(seite_id) == speicher.aufgabe(nr)
+    assert speicher.aufgabe_zur_seite(fremd)["titel"] == "B"
+    assert speicher.aufgabe_zur_seite(999) is None
 
 
 def test_aufgabe_loeschen_entfernt_zeilen_und_bilddateien(speicher, tmp_path):
@@ -437,11 +467,36 @@ def test_vorschlag_ueber_erhaltenem_rahmen_wird_nicht_angelegt(speicher):
         _zeichen(150, 100, 100, 40, gelesen="genau die Hälfte"),        # nicht mehr als die Hälfte
         _zeichen(160, 300, 100, 40, gelesen="weniger als die Hälfte"),
         _zeichen(100, 500, 100, 40, gelesen="über dem alten offenen"),  # das alte ist ersetzt
-        _zeichen(0, 0, 1000, 1000, gelesen="riesig"),  # überdeckt alles, aber kaum eigene Fläche
+        _zeichen(0, 0, 1000, 1000, gelesen="riesig"),  # umschließt erhaltene Rahmen ganz
+        _zeichen(100, 100, 0, 40, gelesen="ohne Fläche"),  # Fläche 0 gilt nie als überdeckt
     ])
     assert {z["gelesen"] for z in _zeichen_der_seite(speicher, seite_id)} == {
         "bestaetigt", "verworfen", "genau die Hälfte", "weniger als die Hälfte",
-        "über dem alten offenen", "riesig"}
+        "über dem alten offenen", "ohne Fläche"}
+
+
+def test_wortgruppe_ueber_bestaetigtem_wort_wird_nicht_angelegt(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [
+        _zeichen(200, 100, 60, 40, gelesen="Wort", status="bestaetigt")])
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [
+        _zeichen(100, 100, 300, 40, gelesen="Wortgruppe darüber")])
+    assert [z["gelesen"] for z in _zeichen_der_seite(speicher, seite_id)] == ["Wort"]
+
+
+def test_luecke_in_bestaetigter_wortgruppe_wird_angelegt(speicher):
+    _, (seite_id,) = _seiten(speicher)
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [
+        _zeichen(100, 100, 300, 40, gelesen="Wortgruppe", status="bestaetigt")])
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    speicher.zeichen_ersetzen(seite_id, lauf, [
+        _zeichen(200, 100, 8, 40, kategorie="Z", typ="luecke", gelesen="Komma fehlt"),
+        _zeichen(210, 100, 8, 40, gelesen="schmales Wort")])  # gleicher Typ: entfällt
+    assert {z["gelesen"] for z in _zeichen_der_seite(speicher, seite_id)} == {
+        "Wortgruppe", "Komma fehlt"}
 
 
 def test_neue_vorschlaege_duerfen_einander_ueberdecken(speicher):
@@ -451,13 +506,27 @@ def test_neue_vorschlaege_duerfen_einander_ueberdecken(speicher):
     assert len(_zeichen_der_seite(speicher, seite_id)) == 2
 
 
+def test_status_gesamt_mit_neuen_seiten():
+    from webapp.speicher import status_gesamt
+    assert status_gesamt(["neu", "neu"]) == "neu"
+    assert status_gesamt([]) == "neu"
+    assert status_gesamt(["fertig", "neu"]) == "laeuft"
+    assert status_gesamt(["fertig", "fertig"]) == "fertig"
+    assert status_gesamt(["neu", "fehlgeschlagen"]) == "fehlgeschlagen"
+    assert status_gesamt(["neu", "wartet"]) == "laeuft"
+
+
 def test_arbeiten_liefert_offen_und_status_gesamt(speicher):
     nr = _aufgabe(speicher)
     arbeit_id = {}
     seiten = {}
-    for name in ("neu", "laeuft", "wartet", "fertig", "fehlgeschlagen"):
+    for name in ("neu", "laeuft", "wartet", "fertig", "fehlgeschlagen", "teils_neu"):
         seiten[name] = speicher.arbeit_anlegen(nr, [("a.jpg", _bild()), ("b.jpg", _bild())])
         arbeit_id[name] = speicher.seite(seiten[name][0])["arbeit_id"]
+    for seite_id in seiten["neu"]:
+        speicher.seite_status(seite_id, "neu")
+    speicher.seite_status(seiten["teils_neu"][0], "fertig")
+    speicher.seite_status(seiten["teils_neu"][1], "neu")
     speicher.seite_status(seiten["laeuft"][0], "fertig")
     speicher.seite_lauf_beginnen(seiten["laeuft"][1])
     speicher.seite_status(seiten["wartet"][0], "wartet")
@@ -473,20 +542,22 @@ def test_arbeiten_liefert_offen_und_status_gesamt(speicher):
 
     arbeiten = {a["id"]: a for a in speicher.arbeiten(nr)}
     for name in arbeit_id:
-        erwartet = "laeuft" if name == "wartet" else name
+        # Eine Arbeit mit einer noch nicht analysierten Seite gilt nie als fertig.
+        erwartet = "laeuft" if name in ("wartet", "teils_neu") else name
         assert arbeiten[arbeit_id[name]]["status_gesamt"] == erwartet, name
     assert arbeiten[arbeit_id["fertig"]]["offen"] == 4
     assert [s["offen"] for s in arbeiten[arbeit_id["fertig"]]["seiten"]] == [2, 2]
     assert arbeiten[arbeit_id["neu"]]["offen"] == 0
 
     (aufgabe,) = speicher.aufgaben()
-    assert aufgabe["arbeiten"] == 5 and aufgabe["seiten"] == 10
-    assert aufgabe["seiten_fertig"] == 4 and aufgabe["seiten_fehlgeschlagen"] == 1
+    assert aufgabe["arbeiten"] == 6 and aufgabe["seiten"] == 12
+    assert aufgabe["seiten_fertig"] == 5 and aufgabe["seiten_fehlgeschlagen"] == 1
     assert aufgabe["offen"] == 4 and aufgabe["bestaetigt"] == 0
 
 
 def test_seiten_unfertig_liefert_wartende_und_laufende(speicher):
     _, seiten = _seiten(speicher, 5)
+    speicher.seite_status(seiten[0], "neu")
     speicher.seite_status(seiten[1], "wartet")
     speicher.seite_lauf_beginnen(seiten[2])
     speicher.seite_status(seiten[3], "fertig")

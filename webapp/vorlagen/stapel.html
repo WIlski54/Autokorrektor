@@ -51,9 +51,13 @@
         {%- endif -%}
       </p>
       <ul class="fehlerliste" data-rolle="fehler">
-        {% for s in a.seiten if s.status == 'fehlgeschlagen' %}
+        {% for s in a.seiten if s.status in ('fehlgeschlagen', 'neu') %}
         <li>
+          {% if s.status == 'neu' -%}
+          <span>Seite {{ s.nummer }}: Die Analyse wurde nicht gestartet.</span>
+          {%- else -%}
           <span>Seite {{ s.nummer }}: {{ s.fehlermeldung or 'Analyse fehlgeschlagen' }}</span>
+          {%- endif %}
           <button class="knopf klein" type="button" data-seite="{{ s.id }}">Erneut versuchen</button>
         </li>
         {% endfor %}

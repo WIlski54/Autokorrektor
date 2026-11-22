@@ -8,6 +8,8 @@
   var gesamttext = document.getElementById("gesamttext");
   var fehlerfeld = document.getElementById("stapelfehler");
   var ABSTAND_MS = 2000;
+  var ERNEUT_FEHLER = "Die Seite ließ sich nicht erneut einreihen. Läuft die App noch? " +
+    "Bitte die Seite neu laden und noch einmal versuchen.";
   var geplant = null;
 
   function vorschlaege(zahl) {
@@ -31,11 +33,12 @@
     var liste = kachel.querySelector('[data-rolle="fehler"]');
     liste.textContent = "";
     arbeit.seiten.forEach(function (seite) {
-      if (seite.status !== "fehlgeschlagen") { return; }
+      if (seite.status !== "fehlgeschlagen" && seite.status !== "neu") { return; }
       var zeile = document.createElement("li");
       var text = document.createElement("span");
-      text.textContent = "Seite " + seite.nummer + ": " +
-        (seite.fehlermeldung || "Analyse fehlgeschlagen");
+      text.textContent = "Seite " + seite.nummer + ": " + (seite.status === "neu"
+        ? "Die Analyse wurde nicht gestartet."
+        : (seite.fehlermeldung || "Analyse fehlgeschlagen"));
       var knopf = document.createElement("button");
       knopf.type = "button";
       knopf.className = "knopf klein";
@@ -97,18 +100,22 @@
       var url = daten.url_erneut.replace("/0/", "/" + Number(knopf.getAttribute("data-seite")) + "/");
       fetch(url, { method: "POST", headers: { "Accept": "application/json" } })
         .then(function (antwort) {
-          return antwort.json().then(function (inhalt) {
-            if (!antwort.ok) { throw new Error(inhalt.fehler || "Das hat nicht geklappt."); }
+          // Ist die Antwort kein JSON (etwa eine Fehlerseite), gilt der feste Text.
+          return antwort.json().catch(function () { return null; }).then(function (inhalt) {
+            if (!antwort.ok || !inhalt || !inhalt.ok) {
+              return (inhalt && typeof inhalt.fehler === "string" && inhalt.fehler) || ERNEUT_FEHLER;
+            }
+            return "";
           });
-        })
-        .then(function () {
-          fehlerZeigen("");
+        }, function () { return ERNEUT_FEHLER; })  // App nicht erreichbar
+        .then(function (meldung) {
+          fehlerZeigen(meldung);
+          if (meldung) {
+            knopf.disabled = false;
+            return;
+          }
           if (geplant !== null) { window.clearTimeout(geplant); }
           abfragen();
-        })
-        .catch(function (fehler) {
-          knopf.disabled = false;
-          fehlerZeigen(fehler.message);
         });
     });
     if (daten.aktiv) { planen(); }

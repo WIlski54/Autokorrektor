@@ -1,6 +1,7 @@
 // Hochladen und Zuordnen: Fotos ablegen, ordnen, per Trennmarke zu Arbeiten verbinden.
-// Reihenfolge und Trennmarken werden nach jeder Änderung gespeichert, aber erst, wenn kein
-// Upload mehr läuft: Der Server entfernt beim Speichern alle Fotos, die in der Liste fehlen.
+// Reihenfolge und Trennmarken werden nach jeder Änderung gespeichert, sobald kein Upload
+// mehr läuft. Der Server entfernt dabei nur die Fotos, die hier ausdrücklich entfernt
+// wurden; Fotos, die diese Seite nicht kennt, bleiben erhalten.
 (function () {
   "use strict";
 
@@ -29,6 +30,7 @@
   var speichernGescheitert = false;
   var startGewuenscht = false;
   var gezogen = null;        // id des Fotos, das gerade gezogen wird
+  var entfernt = [];         // ids entfernter Fotos, die der Server noch nicht gelöscht hat
 
   function element(name, klasse, text) {
     var e = document.createElement(name);
@@ -73,6 +75,7 @@
 
   function entfernen(id) {
     ausGruppen(ohne(gruppen(), id));
+    if (entfernt.indexOf(id) < 0) { entfernt.push(id); }
     aenderung();
   }
 
@@ -246,12 +249,15 @@
     geaendert = false;
     speichert = true;
     speicherstand.textContent = "Speichert …";
+    var gesendet = entfernt.slice();
     fetch(daten.url_ordnen, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ eintraege: eintraege })
+      body: JSON.stringify({ eintraege: eintraege, entfernt: gesendet })
     }).then(function (antwort) {
       if (!antwort.ok) { throw new Error("Status " + antwort.status); }
+      // Gelöscht ist, was mitgeschickt wurde; währenddessen Entferntes folgt beim nächsten Mal.
+      entfernt = entfernt.filter(function (id) { return gesendet.indexOf(id) < 0; });
       speichernGescheitert = false;
       speicherfehler.hidden = true;
     }).catch(function () {

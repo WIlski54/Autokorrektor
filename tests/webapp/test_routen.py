@@ -7,7 +7,8 @@ from PIL import Image
 
 from webapp import app_erzeugen
 
-EINST = {"modelle": {"gemini": "gemini-test", "gpt": "gpt-test", "claude": ""}}
+EINST = {"max_kante": 2400,
+         "modelle": {"gemini": "gemini-test", "gpt": "gpt-test", "claude": ""}}
 
 
 def _zeichen(gelesen="Fahrad", vorschlag="Fahrrad", **felder):
@@ -278,7 +279,7 @@ def test_ordnen_speichert_reihenfolge_trennmarken_und_entfernt(client, speicher)
     nr = _aufgabe(speicher)
     a, b, c = _ablage_fuellen(speicher, nr)
     antwort = client.post(f"/aufgabe/{nr}/ablage/ordnen", json={"eintraege": [
-        {"id": c, "neue_arbeit": True}, {"id": a, "neue_arbeit": False}]})
+        {"id": c, "neue_arbeit": True}, {"id": a, "neue_arbeit": False}], "entfernt": [b]})
     assert antwort.status_code == 200
     assert antwort.get_json() == {"ok": True, "fotos": 2, "arbeiten": 1}
     ablage = speicher.ablage(nr)
@@ -459,6 +460,8 @@ def _zwei_arbeiten(speicher):
     nr = _aufgabe(speicher)
     seiten = speicher.arbeit_anlegen(nr, [("1.jpg", _bild()), ("2.jpg", _bild())])
     seiten += speicher.arbeit_anlegen(nr, [("3.jpg", _bild())])
+    for seite_id in seiten:  # wie Seiten, deren Analyse nie begonnen wurde
+        speicher.seite_status(seite_id, "neu")
     return nr, seiten
 
 
@@ -523,7 +526,8 @@ def test_erneut_lehnt_fertige_und_unbekannte_seite_ab(client, speicher, schlange
     speicher.seite_status(s1, "fertig")
     antwort = client.post(f"/seite/{s1}/erneut")
     assert antwort.status_code == 409 and antwort.get_json()["fehler"]
-    assert client.post(f"/seite/{s2}/erneut").status_code == 409  # neu, nicht fehlgeschlagen
+    speicher.seite_status(s2, "wartet")
+    assert client.post(f"/seite/{s2}/erneut").status_code == 409  # steht schon an
     assert client.post("/seite/999/erneut").status_code == 404
     assert schlange.warten(1) is True and schein.aufrufe == []
     assert speicher.seite(s1)["analyse_status"] == "fertig"
@@ -650,3 +654,132 @@ def test_arbeit_ohne_analyse_nennt_den_stand(client, speicher):
     nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
     text = _text(client.get(f"/arbeit/{speicher.arbeiten(nr)[1]['id']}"))
     assert "noch nicht analysiert" in text and _daten(text, "arbeit-daten")["zeichen"] == []
+
+
+# --- Befunde der Durchsicht ---------------------------------------------------------------
+
+@pytest.mark.parametrize("host", ["boese.example", "boese.example:5001", "127.0.0.1.boese.example",
+                                  "localhost.boese.example:5001", "192.168.0.7:5001", "[::1"])
+def test_fremder_host_wird_abgelehnt(client, speicher, host):
+    nr = _aufgabe(speicher)
+    assert client.get("/", headers={"Host": host}).status_code == 403
+    assert client.get("/statisch/app.css", headers={"Host": host}).status_code == 403
+    antwort = client.post(f"/aufgabe/{nr}/loeschen", headers={"Host": host})
+    assert antwort.status_code == 403 and speicher.aufgabe(nr) is not None
+
+
+@pytest.mark.parametrize("host", ["localhost", "localhost:5001", "127.0.0.1", "127.0.0.1:5001",
+                                  "LOCALHOST:5001"])
+def test_eigener_host_wird_angenommen(client, host):
+    assert client.get("/", headers={"Host": host}).status_code == 200
+    assert client.get("/statisch/app.css", headers={"Host": host}).status_code == 200
+
+
+def test_ordnen_ohne_entfernt_loescht_nichts(client, speicher):
+    nr = _aufgabe(speicher)
+    a, b, c = _ablage_fuellen(speicher, nr)
+    antwort = client.post(f"/aufgabe/{nr}/ablage/ordnen", json={"eintraege": [
+        {"id": c, "neue_arbeit": True}, {"id": a, "neue_arbeit": False}]})
+    assert antwort.status_code == 200
+    # b kam etwa aus einem anderen Fenster: es bleibt und steht hinten.
+    assert antwort.get_json() == {"ok": True, "fotos": 3, "arbeiten": 2}
+    assert [(e["id"], e["neue_arbeit"]) for e in speicher.ablage(nr)] == [
+        (c, True), (a, False), (b, True)]
+    assert len(list(speicher.bilder.iterdir())) == 3
+
+
+def test_ordnen_duldet_schon_entfernte_und_lehnt_unbrauchbares_entfernt_ab(client, speicher):
+    nr, andere = _aufgabe(speicher), _aufgabe(speicher)
+    a, b = _ablage_fuellen(speicher, nr, 2)
+    (fremd,) = _ablage_fuellen(speicher, andere, 1)
+    url = f"/aufgabe/{nr}/ablage/ordnen"
+    for entfernt in ("x", [str(b)], [None], [a]):  # a steht zugleich in den Einträgen
+        antwort = client.post(url, json={"eintraege": [{"id": a}], "entfernt": entfernt})
+        assert antwort.status_code == 400, entfernt
+    assert len(speicher.ablage(nr)) == 2
+    # Ein wiederholtes Speichern nennt b noch einmal; fremde Fotos bleiben unberührt.
+    for _ in range(2):
+        antwort = client.post(url, json={"eintraege": [{"id": a}], "entfernt": [b, fremd]})
+        assert antwort.status_code == 200
+        assert antwort.get_json() == {"ok": True, "fotos": 1, "arbeiten": 1}
+    assert [e["id"] for e in speicher.ablage(nr)] == [a]
+    assert [e["id"] for e in speicher.ablage(andere)] == [fremd]
+
+
+def test_analyse_starten_legt_seiten_wartend_an(client, speicher, schlange, schein):
+    nr = _aufgabe(speicher)
+    _ablage_fuellen(speicher, nr, 2)
+    schein.frei.clear()
+    client.post(f"/aufgabe/{nr}/analyse-starten")
+    status = {s["analyse_status"] for ar in speicher.arbeiten(nr) for s in ar["seiten"]}
+    assert status <= {"wartet", "laeuft"}
+    schein.frei.set()
+    assert schlange.warten(5) is True
+
+
+def test_zweites_analyse_starten_fuehrt_zur_stapelansicht(client, speicher, schlange, schein):
+    nr = _aufgabe(speicher)
+    _ablage_fuellen(speicher, nr, 2)
+    client.post(f"/aufgabe/{nr}/analyse-starten")
+    antwort = client.post(f"/aufgabe/{nr}/analyse-starten", follow_redirects=True)  # Doppelklick
+    assert antwort.status_code == 200 and antwort.request.path == f"/aufgabe/{nr}"
+    assert "keine Fotos" not in _text(antwort)
+    assert schlange.warten(5) is True
+    assert len(speicher.arbeiten(nr)) == 2 and len(schein.aufrufe) == 2
+
+
+def test_erneut_reiht_auch_nie_begonnene_seite_ein(client, speicher, schlange, schein):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    assert speicher.seite(s3)["analyse_status"] == "neu"
+    antwort = client.post(f"/seite/{s3}/erneut")
+    assert antwort.status_code == 200 and antwort.get_json() == {"ok": True}
+    assert schlange.warten(5) is True
+    assert schein.aufrufe == [s3] and speicher.seite(s3)["analyse_status"] == "fertig"
+
+
+def test_stapelansicht_bietet_fuer_nie_begonnene_seite_den_start_an(client, speicher, schlange):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    schlange.einreihen(s1)
+    assert schlange.warten(5) is True
+    text = _text(client.get(f"/aufgabe/{nr}"))
+    assert f'data-seite="{s2}"' in text and f'data-seite="{s3}"' in text
+    assert f'data-seite="{s1}"' not in text
+    stand = client.get(f"/aufgabe/{nr}/stand").get_json()
+    assert stand["arbeiten"][0]["status_gesamt"] == "laeuft"  # nicht „fertig“
+    assert stand["arbeiten"][1]["status_gesamt"] == "neu" and stand["aktiv"] is False
+
+
+def test_zwischenzeitlich_geloeschtes_ergibt_404_statt_500(client, speicher, monkeypatch):
+    nr, (s1, s2, s3) = _zwei_arbeiten(speicher)
+    speicher.seite_status(s1, "fehlgeschlagen", fehlermeldung="x")
+    arbeit_id = speicher.arbeiten(nr)[0]["id"]
+    with monkeypatch.context() as m:  # Aufgabe verschwindet nach dem Lesen der Seite/Arbeit
+        m.setattr(speicher, "aufgabe", lambda id: None)
+        m.setattr(speicher, "aufgabe_zur_seite", lambda id: None)
+        assert client.post(f"/seite/{s1}/erneut").status_code == 404
+        assert client.get(f"/arbeit/{arbeit_id}").status_code == 404
+    with monkeypatch.context() as m:  # Arbeit fehlt schon in der Reihe der Aufgabe
+        m.setattr(speicher, "arbeiten", lambda aufgabe_id: [])
+        assert client.get(f"/arbeit/{arbeit_id}").status_code == 404
+
+
+def test_hochladen_und_hinzufuegen_bei_geloeschter_aufgabe_ergeben_404(client, speicher,
+                                                                      monkeypatch):
+    nr = _aufgabe(speicher)
+    echt = speicher.aufgabe
+    aufrufe = []
+
+    def einmal(id):  # die Route sieht die Aufgabe noch, danach ist sie gelöscht
+        aufrufe.append(id)
+        if len(aufrufe) == 1:
+            aufgabe = echt(id)
+            speicher.aufgabe_loeschen(id)
+            return aufgabe
+        return echt(id)
+
+    monkeypatch.setattr(speicher, "aufgabe", einmal)
+    assert _hochladen(client, nr, ("a.jpg", _bild())).status_code == 404
+    nr = _aufgabe(speicher)
+    aufrufe.clear()
+    assert _arbeit_hinzufuegen(client, nr, ("a.jpg", _bild())).status_code == 404
+    assert list(speicher.bilder.iterdir()) == []

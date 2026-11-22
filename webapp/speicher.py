@@ -116,18 +116,29 @@ def _zeichen_aus_zeile(zeile):
 
 
 def _ueberdeckt(neu, alt):
-    """Ob der Rahmen `alt` mehr als die Hälfte der Fläche des Rahmens `neu` überdeckt."""
+    """Ob sich zwei Rahmen (x, y, breite, hoehe) überdecken.
+
+    Das gilt, wenn die Schnittfläche mehr als die Hälfte der Fläche des kleineren der
+    beiden Rahmen ausmacht. So entfällt auch eine Wortgruppe, die ein erhaltenes Wort
+    umschließt. Ein Rahmen ohne Fläche gilt nie als überdeckt.
+    """
     x, y, b, h = neu
     ax, ay, ab, ah = alt
+    if b <= 0 or h <= 0 or ab <= 0 or ah <= 0:
+        return False
     breite = min(x + b, ax + ab) - max(x, ax)
     hoehe = min(y + h, ay + ah) - max(y, ay)
-    if breite <= 0 or hoehe <= 0 or b <= 0 or h <= 0:
+    if breite <= 0 or hoehe <= 0:
         return False
-    return breite * hoehe > 0.5 * b * h
+    return breite * hoehe > 0.5 * min(b * h, ab * ah)
 
 
 def status_gesamt(seitenstatus):
-    """Fasst die Analysestatus der Seiten einer Arbeit zu einem Wort zusammen."""
+    """Fasst die Analysestatus der Seiten einer Arbeit zu einem Wort zusammen.
+
+    Eine Arbeit mit einer noch nicht analysierten Seite (`neu`) gilt nie als fertig:
+    Sie wird als `laeuft` gemeldet, wenn daneben fertige Seiten stehen.
+    """
     status = set(seitenstatus)
     if "fehlgeschlagen" in status:
         return "fehlgeschlagen"
@@ -135,6 +146,8 @@ def status_gesamt(seitenstatus):
         return "laeuft"
     if status <= {"neu"}:
         return "neu"
+    if "neu" in status:
+        return "laeuft"
     return "fertig"
 
 
@@ -297,23 +310,41 @@ class Speicher:
             zeile = db.execute("SELECT * FROM ablage WHERE id = ?", (id,)).fetchone()
         return {**dict(zeile), "neue_arbeit": bool(zeile["neue_arbeit"])} if zeile else None
 
-    def ablage_ordnen(self, aufgabe_id, eintraege):
-        """Speichert Reihenfolge und Trennmarken; nicht genannte Fotos werden gelöscht."""
+    def ablage_ordnen(self, aufgabe_id, eintraege, entfernt=()):
+        """Speichert Reihenfolge und Trennmarken der genannten Fotos.
+
+        Gelöscht werden nur die ausdrücklich in `entfernt` genannten Fotos (samt Datei).
+        Fotos, die weder in `eintraege` noch in `entfernt` stehen (etwa aus einem anderen
+        Fenster hochgeladen), bleiben erhalten und rücken in ihrer bisherigen Reihenfolge
+        ans Ende.
+        """
         with self._verbindung() as db:
             db.execute("BEGIN IMMEDIATE")
-            vorhanden = dict(db.execute("SELECT id, bilddatei FROM ablage WHERE aufgabe_id = ?",
-                                        (aufgabe_id,)).fetchall())
-            for platz, eintrag in enumerate(eintraege, start=1):
-                db.execute("UPDATE ablage SET reihenfolge = ?, neue_arbeit = ?"
-                           " WHERE id = ? AND aufgabe_id = ?",
-                           (platz, int(bool(eintrag.get("neue_arbeit", True))),
-                            eintrag["id"], aufgabe_id))
-                vorhanden.pop(eintrag["id"], None)
-            db.executemany("DELETE FROM ablage WHERE id = ?", [(nr,) for nr in vorhanden])
-        self._dateien_loeschen(vorhanden.values())
+            # In bisheriger Reihenfolge; ein dict behält sie bei.
+            vorhanden = {z["id"]: z["bilddatei"] for z in db.execute(
+                "SELECT id, bilddatei FROM ablage WHERE aufgabe_id = ? ORDER BY reihenfolge, id",
+                (aufgabe_id,))}
+            weg = [nr for nr in dict.fromkeys(entfernt) if nr in vorhanden]
+            dateien = [vorhanden.pop(nr) for nr in weg]
+            db.executemany("DELETE FROM ablage WHERE id = ?", [(nr,) for nr in weg])
+            platz = 0
+            for eintrag in eintraege:
+                if vorhanden.pop(eintrag["id"], None) is None:
+                    continue  # fremd, entfernt oder doppelt genannt
+                platz += 1
+                db.execute("UPDATE ablage SET reihenfolge = ?, neue_arbeit = ? WHERE id = ?",
+                           (platz, int(bool(eintrag.get("neue_arbeit", True))), eintrag["id"]))
+            for nr in vorhanden:  # die Ungenannten hinten anhängen
+                platz += 1
+                db.execute("UPDATE ablage SET reihenfolge = ? WHERE id = ?", (platz, nr))
+        self._dateien_loeschen(dateien)
 
     def ablage_zu_arbeiten(self, aufgabe_id):
-        """Bildet aus der Ablage Arbeiten nach den Trennmarken und leert die Ablage."""
+        """Bildet aus der Ablage Arbeiten nach den Trennmarken und leert die Ablage.
+
+        Die Seiten entstehen gleich mit Status `wartet`: Bricht die App ab, bevor sie
+        eingereiht sind, nimmt der nächste Start sie auf.
+        """
         seiten = []
         with self._verbindung() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -341,12 +372,16 @@ class Speicher:
 
     @staticmethod
     def _seite_einfuegen(db, arbeit_id, nummer, bilddatei, breite, hoehe):
-        return db.execute("INSERT INTO seite (arbeit_id, nummer, bilddatei, breite, hoehe)"
-                          " VALUES (?, ?, ?, ?, ?)",
+        """Neue Seite, die auf ihre Analyse wartet."""
+        return db.execute("INSERT INTO seite (arbeit_id, nummer, bilddatei, breite, hoehe,"
+                          " analyse_status) VALUES (?, ?, ?, ?, ?, 'wartet')",
                           (arbeit_id, nummer, bilddatei, breite, hoehe)).lastrowid
 
     def arbeit_anlegen(self, aufgabe_id, bilder):
-        """Eine Arbeit aus mehreren Fotos [(dateiname, daten)]; ValueError bei unlesbarem Bild."""
+        """Eine Arbeit aus mehreren Fotos [(dateiname, daten)]; ValueError bei unlesbarem Bild.
+
+        Die Seiten entstehen mit Status `wartet` (siehe `ablage_zu_arbeiten`).
+        """
         self._aufgabe_pruefen(aufgabe_id)
         if not bilder:
             raise ValueError("eine Arbeit braucht mindestens ein Foto")
@@ -404,6 +439,14 @@ class Speicher:
             zeile = db.execute("SELECT * FROM seite WHERE id = ?", (id,)).fetchone()
         return dict(zeile) if zeile else None
 
+    def aufgabe_zur_seite(self, seite_id):
+        """Die Aufgabe, zu der die Seite gehört; None, wenn es die Seite nicht (mehr) gibt."""
+        with self._verbindung() as db:
+            zeile = db.execute(
+                "SELECT a.* FROM aufgabe a JOIN arbeit ar ON ar.aufgabe_id = a.id"
+                " JOIN seite s ON s.arbeit_id = ar.id WHERE s.id = ?", (seite_id,)).fetchone()
+        return _aufgabe_aus_zeile(zeile) if zeile else None
+
     # --- Analysestatus, Lauf und Zeichen ---------------------------------------------------
 
     def seite_status(self, id, status, lauf=None, **felder):
@@ -444,8 +487,8 @@ class Speicher:
 
         Schreibt nur, wenn `lauf` noch der aktuelle Lauf der Seite ist (sonst False).
         Bestätigte, verworfene und von Hand gesetzte Zeichen bleiben erhalten; ein neuer
-        Vorschlag entfällt, wenn ein erhaltener Rahmen mehr als die Hälfte seiner Fläche
-        überdeckt.
+        Vorschlag entfällt, wenn er sich mit einem erhaltenen Zeichen desselben Typs
+        überdeckt (siehe `_ueberdeckt`). Eine Lücke in einer erhaltenen Wortgruppe bleibt.
         """
         with self._verbindung() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -454,18 +497,19 @@ class Speicher:
                 return False
             db.execute("DELETE FROM zeichen WHERE seite_id = ? AND herkunft = 'ki'"
                        " AND status = 'offen'", (seite_id,))
-            erhalten = [tuple(z) for z in db.execute(
-                "SELECT x, y, breite, hoehe FROM zeichen WHERE seite_id = ?", (seite_id,))]
+            erhalten = [(z["typ"], (z["x"], z["y"], z["breite"], z["hoehe"])) for z in db.execute(
+                "SELECT typ, x, y, breite, hoehe FROM zeichen WHERE seite_id = ?", (seite_id,))]
             for z in zeichen:
+                typ = z.get("typ", "wort")
                 rahmen = (z["x"], z["y"], z["breite"], z["hoehe"])
-                if any(_ueberdeckt(rahmen, alt) for alt in erhalten):
+                if any(typ == alt_typ and _ueberdeckt(rahmen, alt) for alt_typ, alt in erhalten):
                     continue
                 rahmen_ki = z.get("rahmen_ki")
                 db.execute(
                     "INSERT INTO zeichen (seite_id, kategorie, typ, x, y, breite, hoehe, gelesen,"
                     " vorschlag, herkunft, status, bestaetigt_wie, rahmen_ki)"
                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (seite_id, z["kategorie"], z.get("typ", "wort"), *rahmen,
+                    (seite_id, z["kategorie"], typ, *rahmen,
                      z.get("gelesen") or "", z.get("vorschlag") or "",
                      z.get("herkunft", "ki"), z.get("status", "offen"), z.get("bestaetigt_wie"),
                      json.dumps(list(rahmen_ki)) if rahmen_ki is not None else None))

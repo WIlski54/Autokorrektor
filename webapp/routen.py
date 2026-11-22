@@ -11,6 +11,7 @@ from webapp.verfahren import VERFAHREN, VOREINSTELLUNG, anzeigename, hindernis
 seiten = Blueprint("seiten", __name__)
 
 KATEGORIEN = (("R", "Rechtschreibung"), ("Z", "Zeichensetzung"), ("Gr", "Grammatik"))
+EIGENE_HOSTS = ("127.0.0.1", "localhost")
 
 
 def _speicher():
@@ -37,9 +38,24 @@ def _fuer_vorlagen():
     return {"anzeigename": anzeigename}
 
 
+def _eigener_host(host):
+    """Ob der Host-Kopf (mit beliebigem Port) diesen Rechner unter seinem lokalen Namen nennt."""
+    try:
+        return urlsplit(f"//{host}").hostname in EIGENE_HOSTS
+    except ValueError:
+        return False
+
+
 @seiten.before_app_request
 def _fremde_herkunft_ablehnen():
-    """Die App hat keinen Login: Schreibende Anfragen fremder Webseiten werden abgewiesen."""
+    """Die App hat keinen Login: Anfragen unter fremdem Namen oder von fremden Webseiten
+    werden abgewiesen.
+
+    Der Host-Kopf muss 127.0.0.1 oder localhost nennen. Sonst könnte eine fremde Webseite,
+    deren Name auf diesen Rechner umgebogen wird (DNS-Rebinding), die App lesen und bedienen.
+    """
+    if not _eigener_host(request.host):
+        abort(403)
     herkunft = request.headers.get("Origin")
     if request.method == "POST" and herkunft and urlsplit(herkunft).netloc != request.host:
         abort(403)
@@ -196,14 +212,17 @@ def stand(aufgabe_id):
 
 @seiten.post("/seite/<int:seite_id>/erneut")
 def seite_erneut(seite_id):
-    """Reiht eine fehlgeschlagene Seite neu ein."""
+    """Reiht eine fehlgeschlagene oder nie begonnene Seite (neu) ein."""
     seite = _speicher().seite(seite_id)
     if seite is None:
         abort(404)
-    if seite["analyse_status"] != "fehlgeschlagen":
-        return {"fehler": "Nur fehlgeschlagene Seiten lassen sich erneut analysieren."}, 409
-    arbeit = _speicher().arbeit(seite["arbeit_id"])
-    grund = _hindernis(_speicher().aufgabe(arbeit["aufgabe_id"]))
+    if seite["analyse_status"] not in ("fehlgeschlagen", "neu"):
+        return {"fehler": "Nur fehlgeschlagene oder noch nicht analysierte Seiten lassen sich "
+                          "erneut analysieren."}, 409
+    aufgabe = _speicher().aufgabe_zur_seite(seite_id)
+    if aufgabe is None:  # inzwischen gelöscht
+        abort(404)
+    grund = _hindernis(aufgabe)
     if grund:
         return {"fehler": grund}, 409
     _schlange().einreihen(seite_id)
@@ -225,6 +244,8 @@ def arbeit(arbeit_id):
     zeichen = [z for z in seite["zeichen"] if z["status"] != "verworfen"]
     aufgabe = _speicher().aufgabe(arbeit["aufgabe_id"])
     reihe = [a["id"] for a in _speicher().arbeiten(arbeit["aufgabe_id"])]
+    if aufgabe is None or arbeit_id not in reihe:  # inzwischen gelöscht
+        abort(404)
     platz = reihe.index(arbeit_id)
     daten = {
         "seite": {"id": seite["id"], "nummer": nummer, "breite": seite["breite"],
@@ -333,10 +354,14 @@ def ablage_hochladen(aufgabe_id):
         try:
             ablage_id = _speicher().bild_ablegen(aufgabe_id, dateiname, daten)
         except ValueError:
+            _aufgabe_oder_404(aufgabe_id)  # inzwischen gelöscht: kein Fehler der Datei
             abgelehnt.append({"dateiname": dateiname,
                               "grund": "kein lesbares Bild (erlaubt sind JPG, PNG und WebP)"})
             continue
         eintrag = _speicher().ablage_eintrag(ablage_id)
+        if eintrag is None:  # inzwischen entfernt oder Aufgabe gelöscht
+            _aufgabe_oder_404(aufgabe_id)
+            continue
         angenommen.append({"id": ablage_id, "dateiname": dateiname,
                            "breite": eintrag["breite"], "hoehe": eintrag["hoehe"]})
     return {"angenommen": angenommen, "abgelehnt": abgelehnt}
@@ -344,24 +369,33 @@ def ablage_hochladen(aufgabe_id):
 
 @seiten.post("/aufgabe/<int:aufgabe_id>/ablage/ordnen")
 def ablage_ordnen(aufgabe_id):
-    """Speichert Reihenfolge und Trennmarken; nicht genannte Fotos werden entfernt."""
+    """Speichert Reihenfolge und Trennmarken als {"eintraege": [...], "entfernt": [...]}.
+
+    Entfernt werden nur die in `entfernt` genannten Fotos. Was in keiner der beiden Listen
+    steht (etwa aus einem anderen Fenster hochgeladen), bleibt und rückt ans Ende.
+    """
     _aufgabe_oder_404(aufgabe_id)
     inhalt = request.get_json(silent=True)
     eintraege = inhalt.get("eintraege") if isinstance(inhalt, dict) else None
     if not isinstance(eintraege, list):
         return {"fehler": "Die Angaben zur Reihenfolge fehlen."}, 400
+    entfernt = inhalt.get("entfernt", [])
+    if not isinstance(entfernt, list) or any(type(nr) is not int for nr in entfernt):
+        return {"fehler": "Die Angaben zu den entfernten Fotos sind unbrauchbar."}, 400
     vorhanden = {e["id"] for e in _speicher().ablage(aufgabe_id)}
     sauber, gesehen = [], set()
     for eintrag in eintraege:
         nr = eintrag.get("id") if isinstance(eintrag, dict) else None
-        if type(nr) is not int or nr not in vorhanden or nr in gesehen:
+        if type(nr) is not int or nr not in vorhanden or nr in gesehen or nr in entfernt:
             return {"fehler": "Die Angaben zur Reihenfolge passen nicht zur Ablage. "
                               "Bitte die Seite neu laden."}, 400
         gesehen.add(nr)
         sauber.append({"id": nr, "neue_arbeit": bool(eintrag.get("neue_arbeit", True))})
-    _speicher().ablage_ordnen(aufgabe_id, sauber)
-    arbeiten = sum(1 for platz, e in enumerate(sauber) if platz == 0 or e["neue_arbeit"])
-    return {"ok": True, "fotos": len(sauber), "arbeiten": arbeiten}
+    # Schon entfernte oder fremde Kennungen in `entfernt` übergeht der Speicher.
+    _speicher().ablage_ordnen(aufgabe_id, sauber, entfernt=entfernt)
+    ablage = _speicher().ablage(aufgabe_id)
+    arbeiten = sum(1 for platz, e in enumerate(ablage) if platz == 0 or e["neue_arbeit"])
+    return {"ok": True, "fotos": len(ablage), "arbeiten": arbeiten}
 
 
 @seiten.post("/aufgabe/<int:aufgabe_id>/analyse-starten")
@@ -374,6 +408,8 @@ def analyse_starten(aufgabe_id):
         flash(f"Die Analyse wurde nicht gestartet. {grund}", "fehler")
         return zurueck
     if not _speicher().ablage(aufgabe_id):
+        if _speicher().arbeiten(aufgabe_id):  # etwa ein Doppelklick: die Analyse läuft schon
+            return redirect(url_for("seiten.stapel", aufgabe_id=aufgabe_id))
         flash("Es liegen noch keine Fotos in der Ablage.", "fehler")
         return zurueck
     for seite_id in _speicher().ablage_zu_arbeiten(aufgabe_id):
@@ -402,6 +438,7 @@ def arbeit_hinzufuegen(aufgabe_id):
         seiten_ids = _speicher().arbeit_anlegen(
             aufgabe_id, sorted(gelesen, key=lambda datei: _natuerlich(datei[0])))
     except ValueError as fehler:
+        _aufgabe_oder_404(aufgabe_id)  # inzwischen gelöscht
         flash(f"Die Arbeit wurde nicht hinzugefügt ({fehler}). "
               "Erlaubt sind JPG, PNG und WebP.", "fehler")
         return zurueck

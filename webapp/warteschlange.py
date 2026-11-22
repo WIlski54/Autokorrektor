@@ -39,7 +39,9 @@ class Warteschlange:
         self.zeitgrenze_s = zeitgrenze_s
         self._arbeiter = ThreadPoolExecutor(max_workers=gleichzeitig,
                                             thread_name_prefix="warteschlange")
-        self._anstehend = set()  # eingereihte und laufende Seiten
+        # In dieser Warteschlange eingereihte und laufende Seiten. Der Status in der
+        # Datenbank sagt darüber nichts: `wartet` trägt eine Seite schon ab dem Anlegen.
+        self._anstehend = set()
         self._zustand = threading.Condition()
         self._halt = threading.Event()
         _schlangen.add(self)
@@ -47,7 +49,10 @@ class Warteschlange:
     def einreihen(self, seite_id):
         """Setzt den Status `wartet` und startet die Bearbeitung.
 
-        Eine Seite, die schon ansteht oder gerade läuft, wird nicht doppelt eingereiht.
+        Eine Seite, die in dieser Warteschlange schon ansteht oder gerade läuft, wird
+        nicht doppelt eingereiht. Auf den Status in der Datenbank kommt es dabei nicht an:
+        Eine Seite, die dort schon `wartet` (frisch angelegt oder nach einem Abbruch),
+        wird eingereiht.
         """
         with self._zustand:
             if seite_id in self._anstehend:
@@ -63,10 +68,19 @@ class Warteschlange:
             if not self._halt.is_set():
                 raise fehler
 
-    def wiederaufnehmen(self):
-        """Reiht nach einem Neustart alle Seiten ein, die noch warten oder als laufend gelten."""
+    def wiederaufnehmen(self, hindernis=None):
+        """Reiht nach einem Neustart alle Seiten ein, die noch warten oder als laufend gelten.
+
+        `hindernis(seite_id)` nennt, warum eine Seite nicht analysiert werden kann (sonst
+        None). Eine solche Seite wird nicht eingereiht, sondern gilt mit dieser Meldung
+        als fehlgeschlagen; nach dem Beheben lässt sie sich erneut versuchen.
+        """
         for seite_id in self.speicher.seiten_unfertig():
-            self.einreihen(seite_id)
+            grund = hindernis(seite_id) if hindernis is not None else None
+            if grund:
+                self.speicher.seite_status(seite_id, "fehlgeschlagen", fehlermeldung=str(grund))
+            else:
+                self.einreihen(seite_id)
 
     def warten(self, timeout=None):
         """Nur für Tests: blockiert, bis alles abgearbeitet ist; False bei Zeitablauf."""
@@ -104,11 +118,17 @@ class Warteschlange:
                 meldung = ergebnis.get("fehlermeldung")
             if meldung is not None:
                 self._fehlgeschlagen(seite_id, lauf, meldung)
-            elif self.speicher.zeichen_ersetzen(seite_id, lauf, ergebnis.get("zeichen") or []):
-                self.speicher.seite_status(
-                    seite_id, "fertig", lauf=lauf, fehlermeldung=None,
-                    transkription=ergebnis.get("transkription") or "",
-                    dauer_s=ergebnis.get("dauer_s"), verworfen=ergebnis.get("verworfen") or 0)
+            elif not (self.speicher.zeichen_ersetzen(seite_id, lauf, ergebnis.get("zeichen") or [])
+                      and self.speicher.seite_status(
+                          seite_id, "fertig", lauf=lauf, fehlermeldung=None,
+                          transkription=ergebnis.get("transkription") or "",
+                          dauer_s=ergebnis.get("dauer_s"),
+                          verworfen=ergebnis.get("verworfen") or 0)):
+                # Sollte nicht vorkommen: Jemand anderes hat für die Seite einen neuen Lauf
+                # begonnen (etwa eine zweite Instanz der App), oder sie wurde gelöscht.
+                protokoll.warning(
+                    "Ergebnis für Seite %s verworfen: Lauf %s ist veraltet (die Seite wurde "
+                    "inzwischen neu begonnen oder gelöscht).", seite_id, lauf)
         except Exception as fehler:  # etwa Datenbank gesperrt: Seite nicht als laufend zurücklassen
             protokoll.exception("Seite %s konnte nicht bearbeitet werden", seite_id)
             try:
@@ -123,7 +143,11 @@ class Warteschlange:
                                    fehlermeldung=str(meldung))
 
     def _mit_zeitgrenze(self, seite_id):
-        """Gibt (Ergebnis, Fehlermeldung) zurück; None, wenn die App währenddessen endet."""
+        """Gibt (Ergebnis, Fehlermeldung) zurück; None, wenn die App währenddessen endet.
+
+        Auch ein Ergebnis, das erst nach `beenden` eintrifft, zählt nicht mehr: Der
+        Aufrufer schreibt dann nichts, die Seite bleibt für den Neustart unfertig.
+        """
         fach = {}
         fertig = threading.Event()
 
@@ -143,4 +167,6 @@ class Warteschlange:
             if time.monotonic() >= frist:
                 return None, (f"Zeitüberschreitung: Die Analyse hat länger als "
                               f"{self.zeitgrenze_s:g} Sekunden gedauert.")
+        if self._halt.is_set():
+            return None
         return fach.get("ergebnis"), fach.get("meldung")
