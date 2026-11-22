@@ -14,7 +14,7 @@ from korrektor.einrasten import einrasten
 from korrektor.ergebnis import beschneiden, ergebnis
 from korrektor.koordinaten import gemini_zu_pixel
 from korrektor.verfahren import gemini
-from korrektor.verfahren.allein import aus_antwort
+from korrektor.verfahren.allein import aus_antwort, frist_erreicht
 from korrektor.verfahren.vision_kombi import vision_lesen, woerter_aus_antwort
 
 NAME = "gemini_vision"
@@ -41,7 +41,9 @@ def ausfuehren(bildpfad, einst):
     daten, groesse, faktor = bild.laden(bildpfad, einst["max_kante"])
     start = time.time()
     meldung = None
-    for _ in range(2):
+    for versuch in range(2):
+        if versuch and frist_erreicht(einst.get("frist")):
+            break  # die Zeitgrenze des Aufrufers ist überschritten: kein zweiter Versuch
         try:
             with ThreadPoolExecutor(max_workers=2) as gleichzeitig:
                 vision_lauf = gleichzeitig.submit(vision_lesen, daten)

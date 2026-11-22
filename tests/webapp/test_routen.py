@@ -1,6 +1,7 @@
 import io
 import json
 import threading
+import time
 
 import pytest
 from PIL import Image
@@ -102,11 +103,19 @@ def test_voreingestellte_analyse_ruft_seite_analysieren(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp, "seite_analysieren",
                         lambda speicher, seite_id, einst: aufrufe.append((seite_id, einst)) or {})
     app = app_erzeugen(tmp_path / "daten", EINST)
+    schlange = app.extensions["warteschlange"]
     try:
-        app.extensions["warteschlange"].analysieren(7)
+        vorher = time.monotonic()
+        schlange.analysieren(7)
+        nachher = time.monotonic()
     finally:
-        app.extensions["warteschlange"].beenden()
-    assert aufrufe == [(7, EINST)]
+        schlange.beenden()
+    ((seite_id, einst),) = aufrufe
+    assert seite_id == 7 and {**einst, "frist": None} == {**EINST, "frist": None}
+    # Nach der Zeitgrenze der Warteschlange beginnt das Verfahren keinen zweiten Versuch.
+    assert schlange.zeitgrenze_s == 240
+    assert vorher + 240 <= einst["frist"] <= nachher + 240
+    assert "frist" not in EINST
 
 
 def test_startseite_zeigt_prototyp_hinweis_und_aufgabe(client, speicher):

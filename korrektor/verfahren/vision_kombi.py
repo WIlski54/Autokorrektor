@@ -10,6 +10,7 @@ from korrektor import bild
 from korrektor.anweisung import anpassen, json_lesen
 from korrektor.ergebnis import ergebnis, fund
 from korrektor.koordinaten import ecken_zu_rahmen, luecke, vereinigen
+from korrektor.verfahren.allein import frist_erreicht
 
 NAME = "vision_kombi"
 
@@ -131,7 +132,9 @@ def ausfuehren(bildpfad, einst):
     daten, groesse, faktor = bild.laden(bildpfad, einst["max_kante"])
     start = time.time()
     meldung = None
-    for _ in range(2):
+    for versuch in range(2):
+        if versuch and frist_erreicht(einst.get("frist")):
+            break  # die Zeitgrenze des Aufrufers ist überschritten: kein zweiter Versuch
         try:
             annotation = vision_lesen(daten)
             woerter = woerter_aus_antwort(annotation, faktor)

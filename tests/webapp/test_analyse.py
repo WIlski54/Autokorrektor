@@ -84,6 +84,13 @@ def test_verfahren_bekommt_bildpfad_und_aufgabe(speicher, schein):
     assert uebergeben["aufgabe"] == {"fach": "Englisch", "jahrgang": 7, "kategorien": ["R", "Gr"]}
     assert uebergeben["max_kante"] == 2400 and uebergeben["modelle"] == {"gemini": "m"}
     assert "aufgabe" not in einst  # die übergebenen Einstellungen bleiben unberührt
+    assert "frist" not in uebergeben
+
+
+def test_verfahren_bekommt_die_frist(speicher, schein):
+    seite_analysieren(speicher, _seite(speicher), {"max_kante": 2400, "frist": 123.5})
+    ((_, uebergeben),) = schein.aufrufe
+    assert uebergeben["frist"] == 123.5
 
 
 def test_fund_einer_ausgeschalteten_kategorie_entfaellt(speicher, schein):

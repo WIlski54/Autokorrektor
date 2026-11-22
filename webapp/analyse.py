@@ -21,6 +21,8 @@ def seite_analysieren(speicher, seite_id, einst):
     """Ruft das Verfahren der Aufgabe für eine Seite auf; speichert selbst nichts.
 
     Gibt {"zeichen", "transkription", "dauer_s", "verworfen", "fehlermeldung"} zurück.
+    Ein Eintrag `einst["frist"]` (Wert von `time.monotonic()`) geht an das Verfahren weiter:
+    Danach beginnt es keinen zweiten Versuch mehr.
     Funde einer Kategorie, die in der Aufgabe nicht eingeschaltet ist, entfallen.
     """
     seite = speicher.seite(seite_id)

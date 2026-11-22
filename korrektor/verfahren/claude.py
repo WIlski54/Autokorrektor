@@ -29,4 +29,4 @@ def fragen(anweisung, jpeg, modell, json_antwort=True, max_tokens=8000):
 def ausfuehren(bildpfad, einst):
     return allein.ausfuehren(bildpfad, NAME, einst["modelle"]["claude"], RAHMEN_ANTEIL,
                              anteil_zu_pixel, fragen, einst["max_kante"],
-                             aufgabe=einst.get("aufgabe"))
+                             aufgabe=einst.get("aufgabe"), frist=einst.get("frist"))

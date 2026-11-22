@@ -26,18 +26,27 @@ def aus_antwort(roh, bildgroesse, umrechnen):
     return roh.get("transkription"), funde, verworfen
 
 
+def frist_erreicht(frist):
+    """Ob der Zeitpunkt `frist` (ein Wert von `time.monotonic()`) erreicht ist; ohne Frist nie."""
+    return frist is not None and time.monotonic() >= frist
+
+
 def ausfuehren(bildpfad, name, modell, rahmenhinweis, umrechnen, fragen, max_kante,
-               aufgabe=None):
+               aufgabe=None, frist=None):
     """`fragen(anweisung, jpeg_bytes, modell)` liefert (Antworttext, Nutzung).
 
     `aufgabe` ({"fach", "jahrgang", "kategorien"}) fließt in die Anweisung ein.
+    Ist `frist` (ein Wert von `time.monotonic()`) erreicht, beginnt nach einem Fehler
+    kein zweiter Versuch mehr.
     """
     bildpfad = Path(bildpfad)
     daten, groesse, _ = bild.laden(bildpfad, max_kante)
     modelle = {"lesen": modell, "analyse": modell}
     start = time.time()
     meldung = None
-    for _ in range(2):
+    for versuch in range(2):
+        if versuch and frist_erreicht(frist):
+            break  # die Zeitgrenze des Aufrufers ist überschritten: kein zweiter Versuch
         try:
             text, nutzung = fragen(anweisung(rahmenhinweis, aufgabe), daten, modell)
             transkription, funde, verworfen = aus_antwort(json_lesen(text), groesse, umrechnen)
