@@ -1,6 +1,8 @@
+import io
 import sqlite3
 
 import pytest
+from PIL import Image
 
 from webapp.speicher import Speicher
 
@@ -14,6 +16,22 @@ def _aufgabe(speicher, **felder):
     werte = {"titel": "Versuchsbeschreibung", "fach": "Deutsch", "jahrgang": 9,
              "kategorien": ["R", "Z", "Gr"], "verfahren": "gemini", **felder}
     return speicher.aufgabe_anlegen(**werte)
+
+
+def _bild(groesse=(60, 40), farbe="white", format="JPEG", **zusatz):
+    puffer = io.BytesIO()
+    Image.new("RGB", groesse, farbe).save(puffer, format=format, **zusatz)
+    return puffer.getvalue()
+
+
+def _bilddateien(speicher):
+    return sorted(p.name for p in speicher.bilder.iterdir())
+
+
+def _fuenf_fotos(speicher, nr, marken=(1, 0, 1, 1, 0)):
+    ids = [speicher.bild_ablegen(nr, f"{i}.jpg", _bild((60 + i, 40))) for i in range(len(marken))]
+    speicher.ablage_ordnen(nr, [{"id": i, "neue_arbeit": bool(m)} for i, m in zip(ids, marken)])
+    return ids
 
 
 # --- Schema und Aufgaben ---------------------------------------------------------------
@@ -85,3 +103,189 @@ def test_aufgaben_liefert_zaehlwerte_null_fuer_leere_aufgabe(speicher):
 def test_aufgaben_neueste_zuerst(speicher):
     erste, zweite = _aufgabe(speicher, titel="A"), _aufgabe(speicher, titel="B")
     assert [a["id"] for a in speicher.aufgaben()] == [zweite, erste]
+
+
+# --- Ablage, Arbeiten, Seiten ----------------------------------------------------------
+
+def test_bild_ablegen_speichert_jpeg_mit_groesse(speicher):
+    nr = _aufgabe(speicher)
+    ablage_id = speicher.bild_ablegen(nr, "foto.png", _bild((60, 40), format="PNG"))
+    (eintrag,) = speicher.ablage(nr)
+    assert eintrag["id"] == ablage_id and eintrag["aufgabe_id"] == nr
+    assert (eintrag["breite"], eintrag["hoehe"]) == (60, 40)
+    assert eintrag["neue_arbeit"] is True
+    pfad = speicher.bildpfad(eintrag["bilddatei"])
+    assert pfad.parent == speicher.bilder and pfad.suffix == ".jpg"
+    with Image.open(pfad) as img:
+        assert img.format == "JPEG" and img.size == (60, 40)
+
+
+def test_bild_ablegen_nimmt_webp_und_vergibt_eindeutige_namen(speicher):
+    nr = _aufgabe(speicher)
+    speicher.bild_ablegen(nr, "gleich.jpg", _bild())
+    speicher.bild_ablegen(nr, "gleich.jpg", _bild())
+    speicher.bild_ablegen(nr, "foto.webp", _bild(format="WEBP"))
+    eintraege = speicher.ablage(nr)
+    assert len({e["bilddatei"] for e in eintraege}) == 3
+    assert [e["reihenfolge"] for e in eintraege] == sorted({e["reihenfolge"] for e in eintraege})
+    assert len(_bilddateien(speicher)) == 3
+
+
+def test_bild_ablegen_dreht_exif_orientierung_aufrecht(speicher):
+    nr = _aufgabe(speicher)
+    roh = Image.new("RGB", (40, 20), "white")
+    roh.paste((255, 0, 0), (0, 0, 20, 20))  # linke Hälfte rot: liegt nach dem Drehen oben
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    puffer = io.BytesIO()
+    roh.save(puffer, format="JPEG", exif=exif, quality=95)
+    speicher.bild_ablegen(nr, "quer.jpg", puffer.getvalue())
+    (eintrag,) = speicher.ablage(nr)
+    assert (eintrag["breite"], eintrag["hoehe"]) == (20, 40)
+    with Image.open(speicher.bildpfad(eintrag["bilddatei"])) as img:
+        assert img.size == (20, 40)
+        assert img.getexif().get(0x0112) in (None, 1)
+        oben, unten = img.getpixel((10, 5)), img.getpixel((10, 35))
+    assert oben[0] > 200 and oben[1] < 60
+    assert min(unten) > 200
+
+
+def test_bild_ablegen_lehnt_nicht_bilder_ab(speicher):
+    nr = _aufgabe(speicher)
+    with pytest.raises(ValueError, match="notiz.txt"):
+        speicher.bild_ablegen(nr, "notiz.txt", b"kein Bild")
+    with pytest.raises(ValueError):
+        speicher.bild_ablegen(nr, "leer.jpg", b"")
+    with pytest.raises(ValueError):
+        speicher.bild_ablegen(nr, "abgeschnitten.jpg", _bild((400, 400))[:200])
+    assert speicher.ablage(nr) == [] and _bilddateien(speicher) == []
+
+
+def test_bild_ablegen_ohne_aufgabe_hinterlaesst_keine_datei(speicher):
+    with pytest.raises(ValueError):
+        speicher.bild_ablegen(999, "foto.jpg", _bild())
+    assert _bilddateien(speicher) == []
+
+
+def test_ablage_ordnen_aendert_reihenfolge_und_trennmarken_und_loescht(speicher):
+    nr = _aufgabe(speicher)
+    a, b, c = (speicher.bild_ablegen(nr, f"{i}.jpg", _bild()) for i in range(3))
+    datei_b = next(e["bilddatei"] for e in speicher.ablage(nr) if e["id"] == b)
+    speicher.ablage_ordnen(nr, [{"id": c, "neue_arbeit": True}, {"id": a, "neue_arbeit": False}])
+    eintraege = speicher.ablage(nr)
+    assert [(e["id"], e["neue_arbeit"]) for e in eintraege] == [(c, True), (a, False)]
+    assert not speicher.bildpfad(datei_b).exists()
+    assert len(_bilddateien(speicher)) == 2
+
+
+def test_ablage_ordnen_beruehrt_andere_aufgaben_nicht(speicher):
+    eins, zwei = _aufgabe(speicher), _aufgabe(speicher)
+    speicher.bild_ablegen(eins, "a.jpg", _bild())
+    b = speicher.bild_ablegen(zwei, "b.jpg", _bild())
+    speicher.ablage_ordnen(eins, [{"id": b, "neue_arbeit": False}])
+    assert speicher.ablage(eins) == []
+    (fremd,) = speicher.ablage(zwei)
+    assert fremd["id"] == b and fremd["neue_arbeit"] is True
+    assert _bilddateien(speicher) == [fremd["bilddatei"]]
+
+
+def test_ablage_zu_arbeiten_bildet_arbeiten_nach_trennmarken(speicher):
+    nr = _aufgabe(speicher)
+    _fuenf_fotos(speicher, nr)
+    dateien = [e["bilddatei"] for e in speicher.ablage(nr)]
+    seiten = speicher.ablage_zu_arbeiten(nr)
+    assert len(seiten) == 5 and len(set(seiten)) == 5
+    arbeiten = speicher.arbeiten(nr)
+    assert [a["kuerzel"] for a in arbeiten] == ["01", "02", "03"]
+    assert [len(a["seiten"]) for a in arbeiten] == [2, 1, 2]
+    assert [[s["nummer"] for s in a["seiten"]] for a in arbeiten] == [[1, 2], [1], [1, 2]]
+    alle = [s for a in arbeiten for s in a["seiten"]]
+    assert [s["id"] for s in alle] == seiten
+    assert [s["bilddatei"] for s in alle] == dateien
+    assert [s["breite"] for s in alle] == [60, 61, 62, 63, 64]
+    assert {s["analyse_status"] for s in alle} == {"neu"}
+    assert {s["lauf"] for s in alle} == {0}
+    assert speicher.ablage(nr) == []
+    assert len(_bilddateien(speicher)) == 5
+    assert speicher.ablage_zu_arbeiten(nr) == []
+
+
+def test_erstes_foto_beginnt_immer_eine_arbeit(speicher):
+    nr = _aufgabe(speicher)
+    _fuenf_fotos(speicher, nr, marken=(0, 0, 1))
+    speicher.ablage_zu_arbeiten(nr)
+    assert [len(a["seiten"]) for a in speicher.arbeiten(nr)] == [2, 1]
+
+
+def test_arbeit_anlegen_setzt_nummerierung_fort(speicher):
+    nr = _aufgabe(speicher)
+    _fuenf_fotos(speicher, nr)
+    speicher.ablage_zu_arbeiten(nr)
+    seiten = speicher.arbeit_anlegen(nr, [("a.jpg", _bild((30, 50))),
+                                          ("b.png", _bild(format="PNG"))])
+    assert len(seiten) == 2
+    arbeiten = speicher.arbeiten(nr)
+    assert [a["kuerzel"] for a in arbeiten] == ["01", "02", "03", "04"]
+    assert [s["id"] for s in arbeiten[-1]["seiten"]] == seiten
+    assert [s["nummer"] for s in arbeiten[-1]["seiten"]] == [1, 2]
+    seite = speicher.seite(seiten[0])
+    assert (seite["breite"], seite["hoehe"]) == (30, 50)
+    assert seite["arbeit_id"] == arbeiten[-1]["id"] and seite["analyse_status"] == "neu"
+    # Auch eine spätere Ablage zählt weiter.
+    speicher.bild_ablegen(nr, "c.jpg", _bild())
+    speicher.ablage_zu_arbeiten(nr)
+    assert [a["kuerzel"] for a in speicher.arbeiten(nr)][-1] == "05"
+
+
+def test_arbeit_anlegen_mit_unlesbarem_bild_legt_nichts_an(speicher):
+    nr = _aufgabe(speicher)
+    with pytest.raises(ValueError, match="kaputt.jpg"):
+        speicher.arbeit_anlegen(nr, [("gut.jpg", _bild()), ("kaputt.jpg", b"nichts")])
+    with pytest.raises(ValueError):
+        speicher.arbeit_anlegen(nr, [])
+    with pytest.raises(ValueError):
+        speicher.arbeit_anlegen(999, [("gut.jpg", _bild())])
+    assert speicher.arbeiten(nr) == [] and _bilddateien(speicher) == []
+
+
+def test_arbeit_und_seite_lesen(speicher):
+    nr = _aufgabe(speicher)
+    (seite_id,) = speicher.arbeit_anlegen(nr, [("a.jpg", _bild())])
+    seite = speicher.seite(seite_id)
+    arbeit = speicher.arbeit(seite["arbeit_id"])
+    assert arbeit["aufgabe_id"] == nr and arbeit["kuerzel"] == "01"
+    assert arbeit["bestaetigt_am"] is None
+    assert [s["id"] for s in arbeit["seiten"]] == [seite_id]
+    assert arbeit["seiten"][0]["zeichen"] == []
+    assert speicher.arbeit(999) is None and speicher.seite(999) is None
+
+
+def test_aufgabe_loeschen_entfernt_zeilen_und_bilddateien(speicher, tmp_path):
+    nr, andere = _aufgabe(speicher), _aufgabe(speicher)
+    _fuenf_fotos(speicher, nr)
+    seiten = speicher.ablage_zu_arbeiten(nr)
+    speicher.bild_ablegen(nr, "rest.jpg", _bild())
+    (bleibt,) = speicher.arbeit_anlegen(andere, [("a.jpg", _bild())])
+    assert len(_bilddateien(speicher)) == 7
+
+    speicher.aufgabe_loeschen(nr)
+
+    assert speicher.aufgabe(nr) is None and speicher.aufgabe(andere) is not None
+    assert speicher.arbeiten(nr) == [] and speicher.ablage(nr) == []
+    assert speicher.seite(seiten[0]) is None
+    assert _bilddateien(speicher) == [speicher.seite(bleibt)["bilddatei"]]
+    db = sqlite3.connect(tmp_path / "daten" / "korrektor.db")
+    try:
+        for tabelle, zahl in (("aufgabe", 1), ("arbeit", 1), ("seite", 1), ("ablage", 0)):
+            assert db.execute(f"SELECT COUNT(*) FROM {tabelle}").fetchone()[0] == zahl, tabelle
+    finally:
+        db.close()
+
+
+def test_aufgaben_zaehlt_arbeiten_und_seiten(speicher):
+    nr = _aufgabe(speicher)
+    _fuenf_fotos(speicher, nr)
+    speicher.ablage_zu_arbeiten(nr)
+    (aufgabe,) = speicher.aufgaben()
+    assert aufgabe["arbeiten"] == 3 and aufgabe["seiten"] == 5
+    assert aufgabe["seiten_fertig"] == 0 and aufgabe["offen"] == 0
