@@ -1,4 +1,5 @@
-// Stapelansicht: fragt den Stand ab, solange etwas wartet oder läuft, und zieht die Kacheln nach.
+// Stapelansicht: fragt den Stand ab, solange etwas wartet oder läuft, und zieht die Kacheln nach;
+// ebenso einmal, wenn die Ansicht nach einer Pause wieder gezeigt wird.
 (function () {
   "use strict";
 
@@ -11,6 +12,8 @@
   var ERNEUT_FEHLER = "Die Seite ließ sich nicht erneut einreihen. Läuft die App noch? " +
     "Bitte die Seite neu laden und noch einmal versuchen.";
   var geplant = null;
+  var unterwegs = false;   // eine Abfrage läuft gerade
+  var nochmal = false;     // danach gleich noch einmal abfragen
 
   function vorschlaege(zahl) {
     return zahl === 1 ? "1 offener Vorschlag" : zahl + " offene Vorschläge";
@@ -81,21 +84,38 @@
     return true;
   }
 
+  // Es läuft immer nur eine Abfrage: So kann keine ältere Antwort eine neuere überschreiben.
   function abfragen() {
     geplant = null;
+    if (unterwegs) {
+      nochmal = true;
+      return;
+    }
+    unterwegs = true;
     fetch(daten.url_stand, { headers: { "Accept": "application/json" } })
       .then(function (antwort) {
         if (!antwort.ok) { throw new Error("Status " + antwort.status); }
         return antwort.json();
       })
       .then(function (stand) {
+        unterwegs = false;
         fehlerZeigen("");
-        if (standZeigen(stand) && stand.aktiv) { planen(); }  // sonst: aufhören
+        if (standZeigen(stand) && (stand.aktiv || nochmal)) { weiter(); }  // sonst: aufhören
       })
       .catch(function () {
+        unterwegs = false;
         fehlerZeigen("Der Stand der Analyse lässt sich gerade nicht abrufen. Läuft die App noch?");
-        planen();
+        weiter();
       });
+  }
+
+  function weiter() {
+    if (nochmal) {
+      nochmal = false;
+      abfragen();
+    } else {
+      planen();
+    }
   }
 
   function planen() {
@@ -129,5 +149,18 @@
         });
     });
     if (daten.aktiv) { planen(); }
+
+    // Eine Ansicht, die geruht hat (aus dem Verlauf zurückgeholt oder wieder sichtbar
+    // geworden), fragt den Stand einmal neu ab; läuft noch etwas, geht die Abfrage weiter.
+    var sofortAbfragen = function () {
+      if (geplant !== null) { window.clearTimeout(geplant); }
+      abfragen();
+    };
+    window.addEventListener("pageshow", function (ereignis) {
+      if (ereignis.persisted) { sofortAbfragen(); }
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") { sofortAbfragen(); }
+    });
   }
 })();

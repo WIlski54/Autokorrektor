@@ -1442,4 +1442,13 @@
   // es diese Seite, lädt die Ansicht danach neu und zeigt die neuen Vorschläge.
   abfragePlanen();
   notizZeigen();
+
+  // Eine Ansicht, die geruht hat (aus dem Verlauf zurückgeholt oder wieder sichtbar geworden),
+  // fragt den Stand einmal neu ab: Inzwischen kann in einem anderen Fenster korrigiert worden sein.
+  window.addEventListener("pageshow", function (ereignis) {
+    if (ereignis.persisted) { nachladen(); }
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") { nachladen(); }
+  });
 })();
