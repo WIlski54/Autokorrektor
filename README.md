@@ -37,7 +37,7 @@ Testseiten. Es werden keine Schülerarbeiten verwendet.
 
 Fotos, Ergebnisse, Klicks und Bericht bleiben lokal und werden nicht ins Repository aufgenommen.
 
-## Web-App starten (Prototyp, Etappe 1)
+## Web-App starten (Prototyp, Etappe 1 und 2)
 
 Die Web-App läuft lokal auf dem eigenen Rechner, ohne Login.
 
@@ -45,10 +45,15 @@ Die Web-App läuft lokal auf dem eigenen Rechner, ohne Login.
 2. `python start.py` startet die App und öffnet `http://127.0.0.1:5001` im Browser.
 3. Aufgabe anlegen (Fach, Jahrgang, Fehlerarten, Verfahren), Fotos hochladen, per Trennmarke
    zu Arbeiten verbinden und die Analyse starten. Die Stapelansicht zeigt den Fortschritt.
+4. Arbeit öffnen und die Vorschläge prüfen: bestätigen, verwerfen, ändern, verschieben, eigene
+   Zeichen setzen. Die Tastenbelegung steht unter dem Foto. „Rest bestätigen“ übernimmt alle noch
+   offenen Vorschläge gesammelt.
+5. „Korrektur gesamt bestätigen“ schließt eine Arbeit ab. Das geht erst, wenn kein Vorschlag mehr
+   offen ist, und jede spätere Änderung hebt die Bestätigung wieder auf.
 
-Stand von Etappe 1: Die Vorschläge der KI lassen sich ansehen, aber noch nicht bearbeiten,
-freigeben oder ausgeben. Datenbank und Fotos liegen im Ordner `daten/` und werden nicht ins
-Repository aufgenommen. Die App lässt sich nur einmal gleichzeitig starten.
+Noch nicht enthalten: die Ausgabe als PDF und die Stapelübersicht (Etappe 3). Datenbank und Fotos
+liegen im Ordner `daten/` und werden nicht ins Repository aufgenommen. Die App lässt sich nur einmal
+gleichzeitig starten.
 
 Der Prototyp ist für eigene Texte gedacht. Vor echten Schülerarbeiten sind Verarbeitungsort,
 Auftragsverarbeitung und Genehmigung zu klären.
