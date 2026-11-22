@@ -730,7 +730,7 @@ def test_arbeit_bestaetigen_setzt_zeit_und_zahlen(speicher):
         _zeichen(100, 500, status="verworfen"),
         _zeichen(100, 700, herkunft="hand", status="bestaetigt"))
     erwartet = {"einzeln": 1, "gesammelt": 1, "geaendert": 0, "verworfen": 1, "hand": 1}
-    assert speicher.arbeit_bestaetigen(arbeit_id, erwartet) == erwartet
+    assert speicher.arbeit_bestaetigen(arbeit_id) == erwartet
     arbeit = speicher.arbeit(arbeit_id)
     assert arbeit["bestaetigung"] == erwartet
     assert datetime.fromisoformat(arbeit["bestaetigt_am"])
@@ -751,13 +751,16 @@ def test_arbeit_bestaetigen_scheitert_mit_offenem_zeichen_oder_unfertiger_seite(
     assert _ist_bestaetigt(speicher, arbeit_id) is False
 
 
-def test_arbeit_bestaetigen_scheitert_wenn_die_genannten_zahlen_veraltet_sind(speicher):
+def test_arbeit_bestaetigen_scheitert_wenn_der_genannte_stand_veraltet_ist(speicher):
     from webapp.regeln import RegelFehler
-    arbeit_id, _, _ = _fertige_arbeit(speicher, _zeichen(**FEST))
-    veraltet = {"einzeln": 0, "gesammelt": 1, "geaendert": 0, "verworfen": 0, "hand": 0}
-    with pytest.raises(RegelFehler, match="geändert"):
-        speicher.arbeit_bestaetigen(arbeit_id, veraltet)
+    arbeit_id, _, (z1,) = _fertige_arbeit(speicher, _zeichen(**FEST))
+    gezeigt = speicher.arbeit(arbeit_id)["stand"]
+    speicher.zeichen_aendern(z1, vorschlag="anders")  # die Zahlen bleiben dieselben
+    with pytest.raises(RegelFehler, match="inzwischen geändert"):
+        speicher.arbeit_bestaetigen(arbeit_id, gezeigt)
     assert _ist_bestaetigt(speicher, arbeit_id) is False
+    assert speicher.arbeit_bestaetigen(arbeit_id, speicher.arbeit(arbeit_id)["stand"])
+    assert _ist_bestaetigt(speicher, arbeit_id) is True
 
 
 def test_arbeit_bestaetigung_aufheben(speicher):
@@ -781,7 +784,11 @@ def test_arbeit_kuerzel_setzen_laesst_die_bestaetigung_stehen(speicher):
 def test_zeichen_ersetzen_hebt_die_bestaetigung_auf(speicher):
     arbeit_id, (seite_id,), _ = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
     lauf = speicher.seite_lauf_beginnen(seite_id)
-    assert _ist_bestaetigt(speicher, arbeit_id) is True  # der Beginn allein schreibt nichts
+    assert _ist_bestaetigt(speicher, arbeit_id) is False  # schon der Beginn hebt sie auf
+    # Selbst eine Bestätigung, die an allen Regeln vorbei in der Datenbank stünde, verfällt.
+    with speicher._verbindung() as db:
+        db.execute("UPDATE arbeit SET bestaetigt_am = '2026-11-22T10:00:00', bestaetigung = '{}'"
+                   " WHERE id = ?", (arbeit_id,))
     assert speicher.zeichen_ersetzen(seite_id, lauf - 1, []) is False  # veralteter Lauf
     assert _ist_bestaetigt(speicher, arbeit_id) is True
     assert speicher.zeichen_ersetzen(seite_id, lauf, []) is True
@@ -858,3 +865,287 @@ def test_arbeiten_und_arbeit_liefern_bestaetigung_und_bestaetigbar(speicher):
     assert einzeln["bestaetigung"] == zahlen and einzeln["bestaetigbar"] is True
     einzeln = speicher.arbeit(offen["id"])
     assert einzeln["bestaetigbar"] is False and "offen" in einzeln["bestaetigbar_grund"]
+
+
+# --- Durchsicht Etappe 2: ids, Änderungszähler, Migration, Neuanalyse -------------------------
+
+# Das Schema, mit dem Datenbanken vor dieser Änderung angelegt wurden: `zeichen` ohne
+# AUTOINCREMENT, `arbeit` ohne `stand`.
+ALTES_SCHEMA = """
+CREATE TABLE aufgabe (id INTEGER PRIMARY KEY, titel TEXT NOT NULL, fach TEXT NOT NULL,
+    jahrgang INTEGER, kategorien TEXT NOT NULL DEFAULT '["R","Z","Gr"]', verfahren TEXT NOT NULL,
+    vorschlag_in_ausgabe INTEGER NOT NULL DEFAULT 0, erstellt_am TEXT NOT NULL);
+CREATE TABLE ablage (id INTEGER PRIMARY KEY,
+    aufgabe_id INTEGER NOT NULL REFERENCES aufgabe(id) ON DELETE CASCADE,
+    bilddatei TEXT NOT NULL, breite INTEGER NOT NULL, hoehe INTEGER NOT NULL,
+    reihenfolge INTEGER NOT NULL, neue_arbeit INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE arbeit (id INTEGER PRIMARY KEY,
+    aufgabe_id INTEGER NOT NULL REFERENCES aufgabe(id) ON DELETE CASCADE,
+    kuerzel TEXT NOT NULL, reihenfolge INTEGER NOT NULL, bestaetigt_am TEXT, bestaetigung TEXT);
+CREATE TABLE seite (id INTEGER PRIMARY KEY,
+    arbeit_id INTEGER NOT NULL REFERENCES arbeit(id) ON DELETE CASCADE,
+    nummer INTEGER NOT NULL, bilddatei TEXT NOT NULL, breite INTEGER NOT NULL,
+    hoehe INTEGER NOT NULL, analyse_status TEXT NOT NULL DEFAULT 'neu', fehlermeldung TEXT,
+    transkription TEXT, dauer_s REAL, analysiert_am TEXT, lauf INTEGER NOT NULL DEFAULT 0,
+    verworfen INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE zeichen (
+    id INTEGER PRIMARY KEY,
+    seite_id INTEGER NOT NULL REFERENCES seite(id) ON DELETE CASCADE,
+    kategorie TEXT NOT NULL, typ TEXT NOT NULL DEFAULT 'wort', x REAL NOT NULL, y REAL NOT NULL,
+    breite REAL NOT NULL, hoehe REAL NOT NULL, gelesen TEXT NOT NULL DEFAULT '',
+    vorschlag TEXT NOT NULL DEFAULT '', herkunft TEXT NOT NULL DEFAULT 'ki',
+    status TEXT NOT NULL DEFAULT 'offen', bestaetigt_wie TEXT, rahmen_ki TEXT);
+CREATE TABLE einstellung (id INTEGER PRIMARY KEY, schluessel TEXT UNIQUE, wert TEXT);
+CREATE INDEX ablage_aufgabe ON ablage(aufgabe_id);
+CREATE INDEX arbeit_aufgabe ON arbeit(aufgabe_id);
+CREATE INDEX seite_arbeit ON seite(arbeit_id);
+CREATE INDEX zeichen_seite ON zeichen(seite_id);
+INSERT INTO aufgabe (id, titel, fach, jahrgang, verfahren, erstellt_am)
+    VALUES (1, 'Alt', 'Deutsch', 9, 'gemini', '2026-11-01T08:00:00');
+INSERT INTO arbeit (id, aufgabe_id, kuerzel, reihenfolge, bestaetigt_am, bestaetigung) VALUES
+    (1, 1, '01', 1, '2026-11-02T09:00:00',
+     '{"einzeln": 1, "gesammelt": 0, "geaendert": 0, "verworfen": 1, "hand": 1}'),
+    (2, 1, '02', 2, NULL, NULL);
+INSERT INTO seite (id, arbeit_id, nummer, bilddatei, breite, hoehe, analyse_status, lauf) VALUES
+    (1, 1, 1, 'a.jpg', 600, 400, 'fertig', 1), (2, 2, 1, 'b.jpg', 600, 400, 'fertig', 2);
+INSERT INTO zeichen (id, seite_id, kategorie, typ, x, y, breite, hoehe, gelesen, vorschlag,
+                     herkunft, status, bestaetigt_wie, rahmen_ki) VALUES
+    (3, 1, 'R', 'wort', 10, 20, 30, 8, 'Fahrad', 'Fahrrad', 'ki', 'bestaetigt', 'einzeln',
+     '[10, 20, 30, 8]'),
+    (4, 1, 'Z', 'luecke', 50.5, 60, 4, 12, '', ',', 'ki', 'verworfen', NULL, '[50, 60, 4, 12]'),
+    (7, 1, 'A', 'wort', 100, 200, 40, 10, '', 'treffender', 'hand', 'bestaetigt', NULL, NULL),
+    (9, 2, 'Gr', 'wort', 1, 2, 3, 4, 'den', 'dem', 'ki', 'offen', NULL, '[1, 2, 3, 4]');
+"""
+
+
+def _alte_datenbank(tmp_path):
+    ordner = tmp_path / "daten"
+    ordner.mkdir()
+    db = sqlite3.connect(ordner / "korrektor.db")
+    db.executescript(ALTES_SCHEMA)
+    db.commit()
+    db.close()
+    return ordner
+
+
+def _inhalt(ordner):
+    """Alles, was die Migration erhalten oder herstellen muss, als vergleichbare Daten."""
+    db = sqlite3.connect(ordner / "korrektor.db")
+    try:
+        return {
+            "schema": sorted(db.execute(
+                "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")),
+            "zeichen": list(db.execute(
+                "SELECT id, seite_id, kategorie, typ, x, y, breite, hoehe, gelesen, vorschlag,"
+                " herkunft, status, bestaetigt_wie, rahmen_ki FROM zeichen ORDER BY id")),
+            "arbeit": list(db.execute("SELECT * FROM arbeit ORDER BY id")),
+            "seite": list(db.execute("SELECT * FROM seite ORDER BY id")),
+            "folge": list(db.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name"))
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'").fetchone()
+            else None,
+            "fremdschluessel": [(z[2], z[3], z[4], z[6]) for z in db.execute(
+                "PRAGMA foreign_key_list(zeichen)")],
+            "verstoesse": list(db.execute("PRAGMA foreign_key_check")),
+        }
+    finally:
+        db.close()
+
+
+def test_migration_einer_alten_datenbank_erhaelt_zeilen_ids_und_fremdschluessel(tmp_path):
+    ordner = _alte_datenbank(tmp_path)
+    vorher = _inhalt(ordner)
+    assert "AUTOINCREMENT" not in str(vorher["schema"])
+
+    speicher = Speicher(ordner)
+    nachher = _inhalt(ordner)
+    assert nachher["zeichen"] == vorher["zeichen"] and len(nachher["zeichen"]) == 4
+    assert nachher["seite"] == vorher["seite"]
+    assert nachher["arbeit"] == [zeile + (0,) for zeile in vorher["arbeit"]]  # dazu `stand`
+    assert nachher["fremdschluessel"] == [("seite", "seite_id", "id", "CASCADE")]
+    assert nachher["fremdschluessel"] == vorher["fremdschluessel"]
+    assert nachher["verstoesse"] == []
+    namen = {(art, name) for art, name, _ in nachher["schema"]}
+    assert ("index", "zeichen_seite") in namen and ("table", "zeichen") in namen
+    assert ("table", "zeichen_neu") not in namen
+    assert namen == {(art, name) for art, name, _ in vorher["schema"]}
+    (zeichen_sql,) = [sql for art, name, sql in nachher["schema"] if name == "zeichen"]
+    assert "AUTOINCREMENT" in zeichen_sql
+    assert nachher["folge"] == [("zeichen", 9)]
+
+    # Der Speicher liest die alten Daten wie zuvor, samt Bestätigung.
+    arbeit = speicher.arbeit(1)
+    assert arbeit["bestaetigt_am"] == "2026-11-02T09:00:00" and arbeit["stand"] == 0
+    assert [z["id"] for z in arbeit["seiten"][0]["zeichen"]] == [3, 4, 7]
+    assert arbeit["seiten"][0]["zeichen"][0]["rahmen_ki"] == [10, 20, 30, 8]
+
+    # Ein zweites Öffnen ändert nichts.
+    Speicher(ordner)
+    assert _inhalt(ordner) == nachher
+
+    # Neue ids liegen über dem bisherigen Maximum, auch nachdem dieses gelöscht ist.
+    assert speicher.zeichen_loeschen(9) is True
+    neu = speicher.zeichen_anlegen(2, _zeichen(herkunft="hand", status="bestaetigt"))
+    assert neu == 10
+    # Der Fremdschlüssel wirkt: Mit der Aufgabe verschwinden die Zeichen.
+    speicher.aufgabe_loeschen(1)
+    assert _inhalt(ordner)["zeichen"] == []
+
+
+def test_migration_einer_alten_datenbank_ohne_zeichen(tmp_path):
+    ordner = _alte_datenbank(tmp_path)
+    db = sqlite3.connect(ordner / "korrektor.db")
+    db.execute("DELETE FROM zeichen")
+    db.commit()
+    db.close()
+    speicher = Speicher(ordner)
+    assert _inhalt(ordner)["folge"] == [("zeichen", 0)]
+    assert speicher.zeichen_anlegen(1, _zeichen(herkunft="hand", status="bestaetigt")) == 1
+    Speicher(ordner)
+    assert _inhalt(ordner)["folge"] == [("zeichen", 1)]
+
+
+def test_neue_datenbank_braucht_keine_migration(tmp_path):
+    Speicher(tmp_path / "daten")
+    einmal = _inhalt(tmp_path / "daten")
+    assert "AUTOINCREMENT" in str(einmal["schema"]) and "zeichen_neu" not in str(einmal["schema"])
+    Speicher(tmp_path / "daten")
+    assert _inhalt(tmp_path / "daten") == einmal
+
+
+def test_zeichen_ids_werden_nach_dem_loeschen_nicht_wiederverwendet(speicher):
+    arbeit_id, (seite_id,), alt = _fertige_arbeit(speicher, _zeichen(), _zeichen(100, 300))
+    eigen = speicher.zeichen_anlegen(seite_id, _zeichen(100, 500, herkunft="hand",
+                                                         status="bestaetigt"))
+    assert speicher.zeichen_loeschen(eigen) is True
+    wieder = speicher.zeichen_anlegen(seite_id, _zeichen(100, 500, herkunft="hand",
+                                                          status="bestaetigt"))
+    assert wieder > eigen
+    # Eine Neuanalyse ersetzt die offenen Vorschläge: Die neuen tragen neue ids.
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    assert speicher.zeichen_ersetzen(seite_id, lauf, [_zeichen(), _zeichen(100, 300)]) is True
+    neu = [z["id"] for z in _zeichen_der_seite(speicher, seite_id) if z["herkunft"] == "ki"]
+    assert len(neu) == 2 and min(neu) > wieder and not set(neu) & set(alt)
+    for nr in alt:
+        assert speicher.zeichen_eintrag(nr) is None
+
+
+def _stand(speicher, arbeit_id):
+    return speicher.arbeit(arbeit_id)["stand"]
+
+
+def test_stand_steigt_mit_jeder_aenderung_an_zeichen_bestaetigung_und_analysestatus(speicher):
+    arbeit_id, (seite_id,), (z1, z2) = _fertige_arbeit(speicher, _zeichen(), _zeichen(100, 300))
+    andere_id, _, _ = _fertige_arbeit(speicher, _zeichen())
+    fremd = _stand(speicher, andere_id)
+    letzter = _stand(speicher, arbeit_id)
+
+    def gestiegen():
+        nonlocal letzter
+        vorher, letzter = letzter, _stand(speicher, arbeit_id)
+        return letzter > vorher
+
+    speicher.zeichen_aendern(z1, **FEST)
+    assert gestiegen()
+    eigen = speicher.zeichen_anlegen(seite_id, _zeichen(100, 500, herkunft="hand",
+                                                         status="bestaetigt"))
+    assert gestiegen()
+    speicher.zeichen_loeschen(eigen)
+    assert gestiegen()
+    speicher.zeichen_viele_setzen([z2], status="verworfen", bestaetigt_wie=None)
+    assert gestiegen()
+    speicher.zeichen_aendern(z2, status="offen")
+    assert gestiegen()
+    assert speicher.rest_bestaetigen(arbeit_id) == [z2]
+    assert gestiegen()
+    speicher.arbeit_bestaetigen(arbeit_id)
+    assert gestiegen()
+    speicher.arbeit_bestaetigung_aufheben(arbeit_id)
+    assert gestiegen()
+    speicher.seite_status(seite_id, "fehlgeschlagen", fehlermeldung="x")
+    assert gestiegen()
+    assert speicher.seite_neuanalyse_vormerken(seite_id) == arbeit_id
+    assert gestiegen()
+    lauf = speicher.seite_lauf_beginnen(seite_id)
+    assert gestiegen()
+    speicher.zeichen_ersetzen(seite_id, lauf, [_zeichen(100, 700)])
+    assert gestiegen()
+    speicher.seite_status(seite_id, "fertig", lauf=lauf)
+    assert gestiegen()
+
+    # Was nichts schreibt, lässt den Stand stehen.
+    assert speicher.seite_status(seite_id, "fertig", lauf=lauf - 1) is False
+    assert speicher.zeichen_ersetzen(seite_id, lauf - 1, []) is False
+    assert speicher.zeichen_aendern(z1) is True
+    assert speicher.zeichen_loeschen(999) is False
+    speicher.arbeit_kuerzel_setzen(arbeit_id, "neu")
+    assert not gestiegen()
+    assert _stand(speicher, andere_id) == fremd
+
+
+@pytest.mark.parametrize("status", ["neu", "wartet", "laeuft", "fehlgeschlagen"])
+def test_jeder_status_ausser_fertig_hebt_die_bestaetigung_auf(speicher, status):
+    arbeit_id, (seite_id,), _ = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    assert speicher.seite_status(seite_id, "fertig") is True
+    assert _ist_bestaetigt(speicher, arbeit_id) is True
+    assert speicher.seite_status(seite_id, status) is True
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+
+
+def test_beginn_eines_laufs_hebt_die_bestaetigung_auf(speicher):
+    arbeit_id, (seite_id,), _ = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    assert speicher.seite_lauf_beginnen(seite_id) is not None
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+    assert speicher.seite_lauf_beginnen(999) is None
+
+
+def test_neuanalyse_vormerken_setzt_wartet_und_hebt_die_bestaetigung_in_einem_zug_auf(speicher):
+    from webapp.regeln import RegelFehler
+    arbeit_id, (seite_id,), _ = _bestaetigte_arbeit(speicher, _zeichen(**FEST))
+    gezeigt = _stand(speicher, arbeit_id)
+    assert speicher.seite_neuanalyse_vormerken(seite_id) == arbeit_id
+    seite = speicher.seite(seite_id)
+    assert seite["analyse_status"] == "wartet" and seite["fehlermeldung"] is None
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+    # Wer jetzt noch bestätigen will, scheitert: am Stand und an der wartenden Seite.
+    with pytest.raises(RegelFehler, match="inzwischen geändert"):
+        speicher.arbeit_bestaetigen(arbeit_id, gezeigt)
+    with pytest.raises(RegelFehler, match="Seite 1"):
+        speicher.arbeit_bestaetigen(arbeit_id)
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+    # Eine Seite, die schon wartet oder läuft, lässt sich nicht noch einmal vormerken.
+    with pytest.raises(RegelFehler, match="gerade analysiert"):
+        speicher.seite_neuanalyse_vormerken(seite_id)
+    speicher.seite_status(seite_id, "neu")
+    with pytest.raises(RegelFehler):
+        speicher.seite_neuanalyse_vormerken(seite_id)
+    speicher.seite_status(seite_id, "fehlgeschlagen", fehlermeldung="x")
+    assert speicher.seite_neuanalyse_vormerken(seite_id) == arbeit_id
+    assert speicher.seite_neuanalyse_vormerken(999) is None
+
+
+def test_rest_bestaetigen_prueft_stand_und_seiten_und_schreibt_in_einem_zug(speicher):
+    from webapp.regeln import RegelFehler
+    arbeit_id, (s1, s2), (z1, z2) = _fertige_arbeit(
+        speicher, _zeichen(), _zeichen(100, 300, **FEST), seitenzahl=2)
+    z3 = speicher.zeichen_anlegen(s2, _zeichen(herkunft="ki", status="offen"))
+    gezeigt = _stand(speicher, arbeit_id)
+    speicher.zeichen_aendern(z2, vorschlag="anders")
+    with pytest.raises(RegelFehler, match="inzwischen geändert"):
+        speicher.rest_bestaetigen(arbeit_id, gezeigt)
+    speicher.seite_status(s2, "laeuft")
+    with pytest.raises(RegelFehler, match="Seite 2.*nichts gesammelt bestätigt"):
+        speicher.rest_bestaetigen(arbeit_id, _stand(speicher, arbeit_id))
+    assert speicher.zeichen_eintrag(z1)["status"] == "offen"
+    speicher.seite_status(s2, "fertig")
+
+    assert sorted(speicher.rest_bestaetigen(arbeit_id, _stand(speicher, arbeit_id))) == [z1, z3]
+    for nr in (z1, z3):
+        eintrag = speicher.zeichen_eintrag(nr)
+        assert (eintrag["status"], eintrag["bestaetigt_wie"]) == ("bestaetigt", "gesammelt")
+    assert speicher.zeichen_eintrag(z2)["bestaetigt_wie"] == "einzeln"
+    # Ohne offenes Zeichen wird nichts geschrieben: Stand und Bestätigung bleiben.
+    speicher.arbeit_bestaetigen(arbeit_id)
+    vorher = _stand(speicher, arbeit_id)
+    assert speicher.rest_bestaetigen(arbeit_id, vorher) == []
+    assert _stand(speicher, arbeit_id) == vorher and _ist_bestaetigt(speicher, arbeit_id) is True
+    assert speicher.rest_bestaetigen(999) is None

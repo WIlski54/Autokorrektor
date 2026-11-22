@@ -9,7 +9,7 @@ from tests.webapp.test_routen import (  # noqa: F401
 FEST = {"status": "bestaetigt", "bestaetigt_wie": "einzeln"}
 HAND = {"herkunft": "hand", "status": "bestaetigt", "gelesen": "", "vorschlag": "",
         "rahmen_ki": None}
-ARBEIT_FELDER = {"offen", "bestaetigt_am", "bestaetigbar", "grund"}
+ARBEIT_FELDER = {"stand", "offen", "bestaetigt_am", "bestaetigbar", "grund", "seiten"}
 ZEICHEN_FELDER = {"id", "seite_id", "kategorie", "typ", "x", "y", "breite", "hoehe", "gelesen",
                   "vorschlag", "herkunft", "status", "bestaetigt_wie"}
 
@@ -37,6 +37,16 @@ def _bestaetigt(speicher, *zeichen):
 
 def _ist_bestaetigt(speicher, arbeit_id):
     return speicher.arbeit(arbeit_id)["bestaetigt_am"] is not None
+
+
+def _st(speicher, arbeit_id):
+    """Der Körper mit dem aktuellen Stand der Arbeit, wie ihn die Ansicht mitschickt."""
+    return {"stand": speicher.arbeit(arbeit_id)["stand"]}
+
+
+def _kern(arbeit):
+    """Der Stand einer Arbeit aus einer Antwort ohne Änderungszähler und Seitenliste."""
+    return {feld: wert for feld, wert in arbeit.items() if feld not in ("stand", "seiten")}
 
 
 def _ok(antwort):
@@ -67,7 +77,8 @@ def test_bestaetigen_eines_vorschlags(client, speicher):
     assert erg["arbeit"]["bestaetigbar"] is False and "offen" in erg["arbeit"]["grund"]
     assert speicher.zeichen_eintrag(z1)["bestaetigt_wie"] == "einzeln"
     erg = _ok(client.post(f"/zeichen/{z2}/bestaetigen"))
-    assert erg["arbeit"] == {"offen": 0, "bestaetigt_am": None, "bestaetigbar": True, "grund": ""}
+    assert _kern(erg["arbeit"]) == {"offen": 0, "bestaetigt_am": None, "bestaetigbar": True,
+                                    "grund": ""}
 
 
 def test_verwerfen_und_zurueckholen(client, speicher):
@@ -328,18 +339,20 @@ def test_gesamtbestaetigung_scheitert_mit_offenem_zeichen_und_gelingt_nach_rest_
     arbeit_id, seiten, (z1, z2, z3) = _arbeit(
         speicher, _zeichen(), _zeichen(x=300), _zeichen(y=200, **FEST), seitenzahl=2)
     z4 = speicher.zeichen_anlegen(seiten[1], _zeichen())
-    assert "3" in _fehler(client.post(f"/arbeit/{arbeit_id}/bestaetigen"), 409)
+    assert "3" in _fehler(client.post(f"/arbeit/{arbeit_id}/bestaetigen",
+                                      json=_st(speicher, arbeit_id)), 409)
     assert _ist_bestaetigt(speicher, arbeit_id) is False
 
-    erg = _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen"))
+    erg = _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen", json=_st(speicher, arbeit_id)))
     assert sorted(erg["geaendert"]) == sorted([z1, z2, z4]) and erg["zeichen"] is None
-    assert erg["arbeit"] == {"offen": 0, "bestaetigt_am": None, "bestaetigbar": True, "grund": ""}
+    assert _kern(erg["arbeit"]) == {"offen": 0, "bestaetigt_am": None, "bestaetigbar": True,
+                                    "grund": ""}
     for nr in (z1, z2, z4):
         eintrag = speicher.zeichen_eintrag(nr)
         assert (eintrag["status"], eintrag["bestaetigt_wie"]) == ("bestaetigt", "gesammelt")
     assert speicher.zeichen_eintrag(z3)["bestaetigt_wie"] == "einzeln"
 
-    erg = _ok(client.post(f"/arbeit/{arbeit_id}/bestaetigen"))
+    erg = _ok(client.post(f"/arbeit/{arbeit_id}/bestaetigen", json=_st(speicher, arbeit_id)))
     assert erg["arbeit"]["bestaetigt_am"] and erg["arbeit"]["bestaetigbar"] is True
     assert erg["zahlen"] == {"einzeln": 1, "gesammelt": 3, "geaendert": 0, "verworfen": 0,
                              "hand": 0}
@@ -350,7 +363,7 @@ def test_gesamtbestaetigung_scheitert_mit_offenem_zeichen_und_gelingt_nach_rest_
 
 def test_rest_bestaetigen_ohne_offene_zeichen_aendert_nichts(client, speicher):
     arbeit_id, _, _ = _bestaetigt(speicher, _zeichen(**FEST), _zeichen(x=300, status="verworfen"))
-    erg = _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen"))
+    erg = _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen", json=_st(speicher, arbeit_id)))
     assert erg["geaendert"] == [] and erg["arbeit"]["bestaetigt_am"]
     assert _ist_bestaetigt(speicher, arbeit_id) is True
 
@@ -359,12 +372,12 @@ def test_rest_bestaetigen_betrifft_nur_diese_arbeit_und_hebt_die_bestaetigung_au
                                                                                  speicher):
     arbeit_id, _, (z1,) = _arbeit(speicher, _zeichen())
     andere_id, _, (fremd,) = _arbeit(speicher, _zeichen())
-    _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen"))
+    _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen", json=_st(speicher, arbeit_id)))
     assert speicher.zeichen_eintrag(fremd)["status"] == "offen"
     # Eine bestätigte Arbeit bekommt etwa durch Zurückholen wieder ein offenes Zeichen.
     speicher.arbeit_bestaetigen(arbeit_id)
     speicher.zeichen_aendern(z1, status="offen", bestaetigt_wie=None)
-    erg = _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen"))
+    erg = _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen", json=_st(speicher, arbeit_id)))
     assert erg["geaendert"] == [z1] and erg["arbeit"]["bestaetigt_am"] is None
 
 
@@ -387,32 +400,60 @@ def test_die_gespeicherten_zahlen_stimmen(client, speicher):
     assert "3" in stand["grund"] and stand["arbeit"]["offen"] == 3
     assert set(stand["arbeit"]) == ARBEIT_FELDER
 
-    assert len(_ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen"))["geaendert"]) == 3
+    erg = _ok(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen", json=_st(speicher, arbeit_id)))
+    assert len(erg["geaendert"]) == 3
     erwartet["gesammelt"] = 3                                                # 3 gesammelt
     stand = client.get(f"/arbeit/{arbeit_id}/zahlen").get_json()
     assert stand["zahlen"] == erwartet and stand["bestaetigbar"] is True and stand["grund"] == ""
-    erg = _ok(client.post(f"/arbeit/{arbeit_id}/bestaetigen", json={"zahlen": erwartet}))
+    erg = _ok(client.post(f"/arbeit/{arbeit_id}/bestaetigen",
+                          json={"stand": stand["arbeit"]["stand"]}))
     assert erg["zahlen"] == erwartet
     assert speicher.arbeit(arbeit_id)["bestaetigung"] == erwartet
     assert speicher.aufgaben()[0]["bestaetigt"] == 1
 
 
-def test_gesamtbestaetigung_mit_veralteten_zahlen_ergibt_409(client, speicher):
-    arbeit_id, _, _ = _arbeit(speicher, _zeichen(**FEST))
-    veraltet = {"einzeln": 0, "gesammelt": 1, "geaendert": 0, "verworfen": 0, "hand": 0}
-    assert "geändert" in _fehler(
-        client.post(f"/arbeit/{arbeit_id}/bestaetigen", json={"zahlen": veraltet}), 409)
+def test_gesamtbestaetigung_mit_veraltetem_stand_ergibt_409(client, speicher):
+    arbeit_id, _, (z1, z2) = _arbeit(speicher, _zeichen(**FEST), _zeichen(x=300, **FEST))
+    gezeigt = client.get(f"/arbeit/{arbeit_id}/zahlen").get_json()["arbeit"]["stand"]
+    # Zwei Änderungen, nach denen die Zahlen wieder dieselben sind wie im Dialog.
+    _ok(client.post(f"/zeichen/{z1}/zurueckholen"))
+    _ok(client.post(f"/zeichen/{z1}/bestaetigen"))
+    assert "inzwischen geändert" in _fehler(
+        client.post(f"/arbeit/{arbeit_id}/bestaetigen", json={"stand": gezeigt}), 409)
     assert _ist_bestaetigt(speicher, arbeit_id) is False
+    _ok(client.post(f"/arbeit/{arbeit_id}/bestaetigen", json=_st(speicher, arbeit_id)))
+    assert _ist_bestaetigt(speicher, arbeit_id) is True
 
 
+@pytest.mark.parametrize("pfad", ["bestaetigen", "rest-bestaetigen"])
 @pytest.mark.parametrize("inhalt", [
-    [], "ja", {"zahlen": 3}, {"zahlen": {"einzeln": 1}}, {"ja": True},
-    {"zahlen": {"einzeln": "1", "gesammelt": 0, "geaendert": 0, "verworfen": 0, "hand": 0}},
-    {"zahlen": {"einzeln": True, "gesammelt": 0, "geaendert": 0, "verworfen": 0, "hand": 0}}])
-def test_gesamtbestaetigung_mit_ungueltiger_eingabe_ergibt_400(client, speicher, inhalt):
-    arbeit_id, _, _ = _arbeit(speicher, _zeichen(**FEST))
-    _fehler(client.post(f"/arbeit/{arbeit_id}/bestaetigen", json=inhalt), 400)
+    None, [], "ja", {}, {"stand": "1"}, {"stand": True}, {"stand": 1.0}, {"stand": None},
+    {"stand": 0, "ja": True}, {"ja": True},
+    {"zahlen": {"einzeln": 1, "gesammelt": 0, "geaendert": 0, "verworfen": 0, "hand": 0}}])
+def test_bestaetigung_mit_ungueltiger_eingabe_ergibt_400(client, speicher, pfad, inhalt):
+    arbeit_id, _, (z1, z2) = _arbeit(speicher, _zeichen(**FEST), _zeichen(x=300))
+    _fehler(client.post(f"/arbeit/{arbeit_id}/{pfad}", json=inhalt), 400)
     assert _ist_bestaetigt(speicher, arbeit_id) is False
+    assert speicher.zeichen_eintrag(z2)["status"] == "offen"
+
+
+def test_rest_bestaetigen_mit_veraltetem_stand_ergibt_409(client, speicher):
+    arbeit_id, _, (z1, z2) = _arbeit(speicher, _zeichen(), _zeichen(x=300))
+    gezeigt = _st(speicher, arbeit_id)
+    _ok(client.post(f"/zeichen/{z1}/verwerfen"))
+    assert "inzwischen geändert" in _fehler(
+        client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen", json=gezeigt), 409)
+    assert speicher.zeichen_eintrag(z2)["status"] == "offen"
+
+
+@pytest.mark.parametrize("status", ["wartet", "laeuft", "fehlgeschlagen", "neu"])
+def test_rest_bestaetigen_scheitert_bei_nicht_fertiger_seite(client, speicher, status):
+    arbeit_id, seiten, (z1,) = _arbeit(speicher, _zeichen(), seitenzahl=2)
+    speicher.seite_status(seiten[1], status)
+    grund = _fehler(client.post(f"/arbeit/{arbeit_id}/rest-bestaetigen",
+                                json=_st(speicher, arbeit_id)), 409)
+    assert "Seite 2" in grund and "nichts gesammelt bestätigt" in grund
+    assert speicher.zeichen_eintrag(z1)["status"] == "offen"
 
 
 @pytest.mark.parametrize("status, wort", [("fehlgeschlagen", "fehlgeschlagen"), ("wartet", "läuft"),
@@ -420,7 +461,8 @@ def test_gesamtbestaetigung_mit_ungueltiger_eingabe_ergibt_400(client, speicher,
 def test_gesamtbestaetigung_scheitert_bei_nicht_fertiger_seite(client, speicher, status, wort):
     arbeit_id, seiten, _ = _arbeit(speicher, seitenzahl=2)
     speicher.seite_status(seiten[1], status)
-    grund = _fehler(client.post(f"/arbeit/{arbeit_id}/bestaetigen"), 409)
+    grund = _fehler(client.post(f"/arbeit/{arbeit_id}/bestaetigen",
+                                json=_st(speicher, arbeit_id)), 409)
     assert wort in grund and "Seite 2" in grund
     assert _ist_bestaetigt(speicher, arbeit_id) is False
 
@@ -510,6 +552,98 @@ def test_neu_analysieren_ohne_schluessel_reiht_nichts_ein(client, speicher, sche
     assert _ist_bestaetigt(speicher, arbeit_id) is True
 
 
+def test_bestaetigen_nach_dem_vormerken_der_neuanalyse_scheitert(client, speicher, schlange,
+                                                                schein):
+    """Zwischen dem Aufheben der Bestätigung und dem Statuswechsel gibt es keine Lücke mehr."""
+    arbeit_id, (seite_id,), _ = _bestaetigt(speicher, _zeichen(**FEST))
+    schein.frei.clear()
+    gezeigt = _st(speicher, arbeit_id)
+    _ok(client.post(f"/seite/{seite_id}/neu-analysieren"))
+    _fehler(client.post(f"/arbeit/{arbeit_id}/bestaetigen", json=gezeigt), 409)
+    assert "Seite 1" in _fehler(client.post(f"/arbeit/{arbeit_id}/bestaetigen",
+                                            json=_st(speicher, arbeit_id)), 409)
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+    schein.frei.set()
+    assert schlange.warten(5) is True
+
+
+def test_fehlgeschlagene_neuanalyse_hinterlaesst_keine_bestaetigte_arbeit(client, speicher,
+                                                                      schlange, schein):
+    arbeit_id, (seite_id,), _ = _bestaetigt(speicher, _zeichen(**FEST))
+    schein.ergebnis = {**schein.ergebnis, "fehlermeldung": "Dienst nicht erreichbar"}
+    # Selbst wenn die Seite an der Route vorbei eingereiht wird, verfällt die Bestätigung.
+    schlange.einreihen(seite_id)
+    assert schlange.warten(5) is True
+    assert speicher.seite(seite_id)["analyse_status"] == "fehlgeschlagen"
+    assert _ist_bestaetigt(speicher, arbeit_id) is False
+
+
+# --- Stand der Arbeit in den Antworten ---------------------------------------------------------------
+
+def test_jede_schreibende_antwort_nennt_einen_hoeheren_stand_und_die_seiten(client, speicher):
+    arbeit_id, (s1, s2), (z1, z2) = _arbeit(speicher, _zeichen(), _zeichen(x=300), seitenzahl=2)
+    z3 = speicher.zeichen_anlegen(s2, _zeichen())
+    stand = client.get(f"/arbeit/{arbeit_id}/zahlen").get_json()["arbeit"]
+    assert stand["stand"] == speicher.arbeit(arbeit_id)["stand"]
+    assert stand["seiten"] == [{"id": s1, "nummer": 1, "status": "fertig", "offen": 2},
+                               {"id": s2, "nummer": 2, "status": "fertig", "offen": 1}]
+    letzter = stand["stand"]
+    neu = {"kategorie": "R", "typ": "wort", "x": 1, "y": 1, "breite": 20, "hoehe": 10}
+    for pfad, inhalt in [
+            (f"/zeichen/{z1}/bestaetigen", None), (f"/zeichen/{z1}/zurueckholen", None),
+            (f"/zeichen/{z1}/verwerfen", None), (f"/zeichen/{z2}/aendern", {"kategorie": "Gr"}),
+            (f"/zeichen/{z2}/rahmen", {"x": 50, "y": 50, "breite": 30, "hoehe": 8}),
+            (f"/seite/{s1}/zeichen", neu), (f"/arbeit/{arbeit_id}/rest-bestaetigen", "stand"),
+            (f"/arbeit/{arbeit_id}/bestaetigen", "stand"), (f"/seite/{s2}/zeichen", neu)]:
+        if inhalt == "stand":
+            inhalt = {"stand": letzter}
+        erg = _ok(client.post(pfad, json=inhalt))
+        assert erg["arbeit"]["stand"] > letzter, pfad
+        assert erg["arbeit"]["stand"] == speicher.arbeit(arbeit_id)["stand"]
+        letzter = erg["arbeit"]["stand"]
+    assert erg["arbeit"]["seiten"] == [{"id": s1, "nummer": 1, "status": "fertig", "offen": 0},
+                                       {"id": s2, "nummer": 2, "status": "fertig", "offen": 0}]
+    assert client.get(f"/arbeit/{arbeit_id}/zahlen").get_json()["arbeit"] == erg["arbeit"]
+    erg = _ok(client.post(f"/zeichen/{erg['zeichen']['id']}/loeschen"))
+    assert erg["arbeit"]["stand"] > letzter
+
+
+def test_antworten_nennen_den_analysestatus_der_anderen_seiten(client, speicher, schlange,
+                                                               schein):
+    arbeit_id, (s1, s2), (z1,) = _arbeit(speicher, _zeichen(), seitenzahl=2)
+    schein.frei.clear()
+    vorher = speicher.arbeit(arbeit_id)["stand"]
+    erg = _ok(client.post(f"/seite/{s2}/neu-analysieren"))
+    assert erg["arbeit"]["seiten"][1]["status"] in ("wartet", "laeuft")
+    assert erg["arbeit"]["stand"] > vorher
+    erg = _ok(client.post(f"/zeichen/{z1}/bestaetigen"))
+    assert erg["arbeit"]["seiten"][1]["status"] in ("wartet", "laeuft")
+    assert erg["arbeit"]["bestaetigbar"] is False
+    waehrend = erg["arbeit"]["stand"]
+    schein.frei.set()
+    assert schlange.warten(5) is True
+    stand = client.get(f"/arbeit/{arbeit_id}/zahlen").get_json()["arbeit"]
+    assert stand["seiten"][1] == {"id": s2, "nummer": 2, "status": "fertig", "offen": 1}
+    assert stand["stand"] > waehrend
+
+
+# --- Kein Zwischenspeichern ----------------------------------------------------------------------------
+
+def test_seiten_und_json_antworten_werden_nie_zwischengespeichert(client, speicher):
+    arbeit_id, (seite_id,), (z1,) = _arbeit(speicher, _zeichen())
+    aufgabe_id = speicher.arbeit(arbeit_id)["aufgabe_id"]
+    for pfad in ("/", f"/aufgabe/{aufgabe_id}", f"/aufgabe/{aufgabe_id}/stand",
+                 f"/arbeit/{arbeit_id}", f"/arbeit/{arbeit_id}/zahlen", "/einstellungen/kuerzel",
+                 f"/aufgabe/{aufgabe_id}/hochladen", "/arbeit/999", "/arbeit/999/zahlen"):
+        assert client.get(pfad).headers.get("Cache-Control") == "no-store", pfad
+    for antwort in (client.post(f"/zeichen/{z1}/bestaetigen"),
+                    client.post(f"/zeichen/{z1}/bestaetigen"),          # 409
+                    client.post(f"/arbeit/{arbeit_id}/bestaetigen")):   # 400
+        assert antwort.headers.get("Cache-Control") == "no-store"
+    bild = client.get(f"/bild/seite/{seite_id}")
+    assert bild.headers["Cache-Control"] == "private, no-cache" and bild.headers["ETag"]
+
+
 # --- Einstellungen: eigene Kürzel ----------------------------------------------------------------------
 
 def test_kuerzelseite_zeigt_die_voreinstellung(client):
@@ -590,7 +724,8 @@ def test_arbeit_bettet_die_daten_der_korrekturansicht_ein(client, speicher):
         "hand", "bestaetigt", None)
     assert daten["arbeit"] == {
         "id": arbeit_id, "kuerzel": "01", "offen": 2, "bestaetigt_am": None,
-        "bestaetigung": None, "bestaetigbar": False, "grund": daten["arbeit"]["grund"]}
+        "bestaetigung": None, "bestaetigbar": False, "grund": daten["arbeit"]["grund"],
+        "stand": speicher.arbeit(arbeit_id)["stand"], "seiten": daten["seiten"]}
     assert "Seite 2" in daten["arbeit"]["grund"] and "fehlgeschlagen" in daten["arbeit"]["grund"]
     assert daten["seiten"] == [
         {"id": s1, "nummer": 1, "status": "fertig", "offen": 1},

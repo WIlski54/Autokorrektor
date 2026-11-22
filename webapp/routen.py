@@ -1,6 +1,7 @@
 """Alle Seiten und JSON-Schnittstellen der Etappen 1 und 2."""
 import math
 import re
+import time
 from urllib.parse import urlsplit
 
 from flask import (Blueprint, Response, abort, current_app, flash, redirect, render_template,
@@ -64,6 +65,15 @@ def _fremde_herkunft_ablehnen():
     herkunft = request.headers.get("Origin")
     if request.method == "POST" and herkunft and urlsplit(herkunft).netloc != request.host:
         abort(403)
+
+
+@seiten.after_app_request
+def _nicht_zwischenspeichern(antwort):
+    """Seiten und JSON-Antworten zeigen den Stand der Korrektur; der Browser soll sie nie
+    aus einem Zwischenspeicher holen. Die Fotos regeln das selbst über ihre Kennung."""
+    if antwort.mimetype in ("text/html", "application/json") and "ETag" not in antwort.headers:
+        antwort.headers["Cache-Control"] = "no-store"
+    return antwort
 
 
 @seiten.app_errorhandler(HTTPException)
@@ -266,9 +276,7 @@ def arbeit(arbeit_id):
         "verworfen": [_zeichen_daten(z) for z in verworfen],
         "arbeit": {"id": arbeit["id"], "kuerzel": arbeit["kuerzel"],
                    "bestaetigung": arbeit["bestaetigung"], **_arbeit_stand(arbeit)},
-        "seiten": [{"id": s["id"], "nummer": platz_s, "status": s["analyse_status"],
-                    "offen": len(regeln.offene(s["zeichen"]))}
-                   for platz_s, s in enumerate(arbeit["seiten"], start=1)],
+        "seiten": _seiten_stand(arbeit),
         "kuerzel": _kuerzelliste(),
         "url_stand": url_for("seiten.stand", aufgabe_id=aufgabe["id"]),
     }
@@ -284,7 +292,11 @@ def arbeit(arbeit_id):
 #
 # Jede schreibende Antwort hat die Form
 #   {"zeichen": <aktuelles Zeichen oder null>,
-#    "arbeit": {"offen", "bestaetigt_am", "bestaetigbar", "grund"}}
+#    "arbeit": {"stand", "offen", "bestaetigt_am", "bestaetigbar", "grund",
+#               "seiten": [{"id", "nummer", "status", "offen"}]}}
+# `stand` ist der Änderungszähler der Arbeit. Alles in `arbeit` und das Zeichen stammen aus
+# einem Lesevorgang nach dem Schreiben und gehören zu genau diesem Stand; die Ansicht
+# übernimmt nie einen älteren Stand als den, den sie schon zeigt.
 # Ein Regelverstoß ergibt 409, Unbekanntes 404, eine ungültige Eingabe 400, jeweils mit
 # {"fehler": Meldung}.
 
@@ -310,12 +322,22 @@ def _zeichen_daten(zeichen):
     return {feld: zeichen[feld] for feld in ZEICHEN_FELDER}
 
 
+def _seiten_stand(arbeit):
+    """Je Seite der Arbeit ihr Platz, ihr Analysestatus und die Zahl offener Vorschläge."""
+    return [{"id": s["id"], "nummer": platz, "status": s["analyse_status"],
+             "offen": len(regeln.offene(s["zeichen"]))}
+            for platz, s in enumerate(arbeit["seiten"], start=1)]
+
+
 def _arbeit_stand(arbeit):
     """Der Stand einer Arbeit (wie von `speicher.arbeit`) für Antworten und Ansicht."""
-    return {"offen": sum(len(regeln.offene(s["zeichen"])) for s in arbeit["seiten"]),
+    seiten_der_arbeit = _seiten_stand(arbeit)
+    return {"stand": arbeit["stand"],
+            "offen": sum(seite["offen"] for seite in seiten_der_arbeit),
             "bestaetigt_am": arbeit["bestaetigt_am"],
             "bestaetigbar": arbeit["bestaetigbar"],
-            "grund": arbeit["bestaetigbar_grund"]}
+            "grund": arbeit["bestaetigbar_grund"],
+            "seiten": seiten_der_arbeit}
 
 
 def _kuerzelliste():
@@ -329,11 +351,15 @@ def _erlaubte():
 
 
 def _antwort(arbeit_id, zeichen_id=None, **zusatz):
-    """Die gemeinsame Antwort nach einer Änderung; 404, wenn die Arbeit inzwischen fehlt."""
+    """Die gemeinsame Antwort nach einer Änderung; 404, wenn die Arbeit inzwischen fehlt.
+
+    Arbeit und Zeichen stammen aus demselben Lesevorgang und passen zu `arbeit.stand`.
+    """
     arbeit = _speicher().arbeit(arbeit_id)
     if arbeit is None:
         return _gibt_es_nicht("Diese Arbeit")
-    zeichen = _speicher().zeichen_eintrag(zeichen_id) if zeichen_id is not None else None
+    zeichen = next((z for seite in arbeit["seiten"] for z in seite["zeichen"]
+                    if z["id"] == zeichen_id), None)
     return {"zeichen": _zeichen_daten(zeichen) if zeichen else None,
             "arbeit": _arbeit_stand(arbeit), **zusatz}
 
@@ -377,6 +403,14 @@ def _text(inhalt, feld, hoechstens=None):
     if hoechstens is not None and len(wert) > hoechstens:
         raise Eingabefehler(f"Die Angabe {feld} ist zu lang (höchstens {hoechstens} Zeichen).")
     return wert
+
+
+def _stand_aus(inhalt):
+    """Der Stand der Arbeit, den die Ansicht zuletzt gezeigt hat."""
+    stand = inhalt["stand"]
+    if type(stand) is not int:
+        raise Eingabefehler("Die Angabe stand muss eine ganze Zahl sein.")
+    return stand
 
 
 def _kuerzel_aus(inhalt):
@@ -475,20 +509,23 @@ def zeichen_setzen(seite_id):
 
 @seiten.post("/arbeit/<int:arbeit_id>/rest-bestaetigen")
 def arbeit_rest_bestaetigen(arbeit_id):
-    """Bestätigt alle offenen Zeichen der Arbeit gesammelt; nennt sie in `geaendert`."""
-    arbeit = _speicher().arbeit(arbeit_id)
-    if arbeit is None:
+    """Bestätigt alle offenen Zeichen der Arbeit gesammelt; nennt sie in `geaendert`.
+
+    Der Körper nennt mit {"stand": Zahl} den Stand, den der Dialog gezeigt hat. 409, wenn
+    die Arbeit seither geändert wurde oder eine ihrer Seiten nicht fertig analysiert ist.
+    """
+    if _speicher().arbeit(arbeit_id) is None:
         return _gibt_es_nicht("Diese Arbeit")
-    ids = regeln.offene([z for seite in arbeit["seiten"] for z in seite["zeichen"]])
-    # Eine Transaktion; was inzwischen nicht mehr offen ist, bleibt, wie es ist.
-    geaendert = _speicher().zeichen_viele_setzen(ids, nur_status="offen",
-                                                 **regeln.REST_BESTAETIGEN)
+    stand = _stand_aus(_koerper(pflicht=("stand",)))
+    geaendert = _speicher().rest_bestaetigen(arbeit_id, stand)  # prüft und schreibt in einem Zug
+    if geaendert is None:
+        return _gibt_es_nicht("Diese Arbeit")
     return _antwort(arbeit_id, geaendert=geaendert)
 
 
 @seiten.get("/arbeit/<int:arbeit_id>/zahlen")
 def arbeit_zahlen(arbeit_id):
-    """Die fünf Zahlen für den Bestätigungsdialog und ob die Arbeit bestätigbar ist."""
+    """Die fünf Zahlen für den Bestätigungsdialog und der Stand der Arbeit dazu."""
     arbeit = _speicher().arbeit(arbeit_id)
     if arbeit is None:
         return _gibt_es_nicht("Diese Arbeit")
@@ -497,29 +534,17 @@ def arbeit_zahlen(arbeit_id):
             "bestaetigbar": stand["bestaetigbar"], "grund": stand["grund"], "arbeit": stand}
 
 
-def _zahlen_aus(inhalt):
-    """Die Zahlen, die der Dialog gezeigt hat; None, wenn die Anfrage keine nennt."""
-    if "zahlen" not in inhalt:
-        return None
-    zahlen = inhalt["zahlen"]
-    felder = set(regeln.zahlen([]))
-    if (not isinstance(zahlen, dict) or set(zahlen) != felder
-            or any(type(wert) is not int for wert in zahlen.values())):
-        raise Eingabefehler("Die Angabe zahlen ist unbrauchbar.")
-    return zahlen
-
-
 @seiten.post("/arbeit/<int:arbeit_id>/bestaetigen")
 def arbeit_bestaetigen(arbeit_id):
-    """Gesamtbestätigung; 409, wenn die Arbeit nicht bestätigbar ist.
+    """Gesamtbestätigung: {"stand": Zahl} nennt den Stand, den der Dialog gezeigt hat.
 
-    Der Körper darf fehlen. Mit {"zahlen": {...}} (den Zahlen aus dem Dialog) scheitert
-    die Bestätigung mit 409, wenn sich die Zeichen seither geändert haben.
+    409, wenn die Arbeit seither geändert wurde oder nicht bestätigbar ist. Die
+    gespeicherten Zahlen berechnet der Server.
     """
     if _speicher().arbeit(arbeit_id) is None:
         return _gibt_es_nicht("Diese Arbeit")
-    genannt = _zahlen_aus(_koerper(wahl=("zahlen",), leer_erlaubt=True))
-    zahlen = _speicher().arbeit_bestaetigen(arbeit_id, genannt)  # prüft und schreibt in einem Zug
+    stand = _stand_aus(_koerper(pflicht=("stand",)))
+    zahlen = _speicher().arbeit_bestaetigen(arbeit_id, stand)  # prüft und schreibt in einem Zug
     if zahlen is None:
         return _gibt_es_nicht("Diese Arbeit")
     return _antwort(arbeit_id, zahlen=zahlen)
@@ -546,22 +571,23 @@ def seite_neu_analysieren(seite_id):
     Bestätigte, verworfene und eigene Zeichen bleiben; die offenen Vorschläge werden
     ersetzt. Die Gesamtbestätigung der Arbeit verfällt sofort.
     """
-    seite = _speicher().seite(seite_id)
-    if seite is None:
-        return _gibt_es_nicht("Diese Seite")
-    if seite["analyse_status"] not in ("fertig", "fehlgeschlagen"):
-        return {"fehler": "Diese Seite wird gerade analysiert oder wurde noch nie analysiert. "
-                          "Neu analysieren lassen sich nur fertige oder fehlgeschlagene "
-                          "Seiten."}, 409
     aufgabe = _speicher().aufgabe_zur_seite(seite_id)
-    if aufgabe is None:  # inzwischen gelöscht
+    if aufgabe is None:
         return _gibt_es_nicht("Diese Seite")
     grund = _hindernis(aufgabe)
     if grund:
         return {"fehler": grund}, 409
-    _speicher().arbeit_bestaetigung_aufheben(seite["arbeit_id"])
-    _schlange().einreihen(seite_id)
-    return _antwort(seite["arbeit_id"])
+    # Prüft den Status, setzt `wartet` und hebt die Bestätigung auf, alles in einem Zug.
+    arbeit_id = _speicher().seite_neuanalyse_vormerken(seite_id)
+    if arbeit_id is None:  # inzwischen gelöscht
+        return _gibt_es_nicht("Diese Seite")
+    # Der Arbeiter, der die Seite eben fertig gemeldet hat, gibt sie einen Augenblick
+    # später frei; so lange nimmt die Warteschlange sie noch nicht an.
+    for _ in range(100):
+        if _schlange().einreihen(seite_id):
+            break
+        time.sleep(0.02)
+    return _antwort(arbeit_id)
 
 
 # --- Einstellungen: eigene Kürzel ---------------------------------------------------------

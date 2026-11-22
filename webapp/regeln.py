@@ -149,6 +149,15 @@ def offene(zeichenliste):
     return [z["id"] for z in zeichenliste if z["status"] == "offen"]
 
 
+def unfertige_seite(seiten):
+    """Nennt die erste Seite, die nicht fertig analysiert ist, als Satz; sonst ""."""
+    for nummer, seite in enumerate(seiten, start=1):
+        if seite["analyse_status"] != "fertig":
+            warum = _NICHT_FERTIG.get(seite["analyse_status"], "ist noch nicht fertig analysiert")
+            return f"Seite {seite.get('nummer', nummer)} {warum}."
+    return ""
+
+
 def bestaetigbar(seiten):
     """Ob sich die Arbeit insgesamt bestätigen lässt: (True, "") oder (False, Grund).
 
@@ -157,10 +166,9 @@ def bestaetigbar(seiten):
     """
     if not seiten:
         return False, "Die Arbeit hat keine Seiten."
-    for nummer, seite in enumerate(seiten, start=1):
-        if seite["analyse_status"] != "fertig":
-            warum = _NICHT_FERTIG.get(seite["analyse_status"], "ist noch nicht fertig analysiert")
-            return False, f"Seite {seite.get('nummer', nummer)} {warum}."
+    grund = unfertige_seite(seiten)
+    if grund:
+        return False, grund
     zahl = sum(len(offene(seite["zeichen"])) if "zeichen" in seite else seite["offen"]
                for seite in seiten)
     if zahl == 1:

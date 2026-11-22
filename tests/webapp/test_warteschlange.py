@@ -200,8 +200,8 @@ def test_doppelt_eingereihte_seite_wird_nur_einmal_bearbeitet(speicher):
         return _ergebnis()
 
     schlange = Warteschlange(speicher, analysieren)
-    schlange.einreihen(seite_id)
-    schlange.einreihen(seite_id)
+    assert schlange.einreihen(seite_id) is True
+    assert schlange.einreihen(seite_id) is False  # steht schon an
     frei.set()
     assert schlange.warten(5)
     assert aufrufe == [seite_id] and speicher.seite(seite_id)["lauf"] == 1

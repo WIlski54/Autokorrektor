@@ -16,6 +16,29 @@ from PIL import Image
 from korrektor import bild
 from webapp import regeln
 
+# Die Tabelle der Zeichen vergibt ihre ids mit AUTOINCREMENT: Eine einmal vergebene id kommt
+# nie wieder, auch nicht nach dem Löschen. Sonst träfe eine Anfrage aus einem veralteten
+# Fenster nach einer Neuanalyse einen anderen, nie gesehenen Vorschlag.
+ZEICHEN_TABELLE = """
+CREATE TABLE IF NOT EXISTS {name} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seite_id INTEGER NOT NULL REFERENCES seite(id) ON DELETE CASCADE,
+    kategorie TEXT NOT NULL,
+    typ TEXT NOT NULL DEFAULT 'wort',
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    breite REAL NOT NULL,
+    hoehe REAL NOT NULL,
+    gelesen TEXT NOT NULL DEFAULT '',
+    vorschlag TEXT NOT NULL DEFAULT '',
+    herkunft TEXT NOT NULL DEFAULT 'ki',
+    status TEXT NOT NULL DEFAULT 'offen',
+    bestaetigt_wie TEXT,
+    rahmen_ki TEXT
+);
+"""
+ZEICHEN_INDEX = "CREATE INDEX IF NOT EXISTS zeichen_seite ON zeichen(seite_id);"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS aufgabe (
     id INTEGER PRIMARY KEY,
@@ -42,7 +65,8 @@ CREATE TABLE IF NOT EXISTS arbeit (
     kuerzel TEXT NOT NULL,
     reihenfolge INTEGER NOT NULL,
     bestaetigt_am TEXT,
-    bestaetigung TEXT
+    bestaetigung TEXT,
+    stand INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS seite (
     id INTEGER PRIMARY KEY,
@@ -59,22 +83,6 @@ CREATE TABLE IF NOT EXISTS seite (
     lauf INTEGER NOT NULL DEFAULT 0,
     verworfen INTEGER NOT NULL DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS zeichen (
-    id INTEGER PRIMARY KEY,
-    seite_id INTEGER NOT NULL REFERENCES seite(id) ON DELETE CASCADE,
-    kategorie TEXT NOT NULL,
-    typ TEXT NOT NULL DEFAULT 'wort',
-    x REAL NOT NULL,
-    y REAL NOT NULL,
-    breite REAL NOT NULL,
-    hoehe REAL NOT NULL,
-    gelesen TEXT NOT NULL DEFAULT '',
-    vorschlag TEXT NOT NULL DEFAULT '',
-    herkunft TEXT NOT NULL DEFAULT 'ki',
-    status TEXT NOT NULL DEFAULT 'offen',
-    bestaetigt_wie TEXT,
-    rahmen_ki TEXT
-);
 CREATE TABLE IF NOT EXISTS einstellung (
     id INTEGER PRIMARY KEY,
     schluessel TEXT UNIQUE,
@@ -83,8 +91,7 @@ CREATE TABLE IF NOT EXISTS einstellung (
 CREATE INDEX IF NOT EXISTS ablage_aufgabe ON ablage(aufgabe_id);
 CREATE INDEX IF NOT EXISTS arbeit_aufgabe ON arbeit(aufgabe_id);
 CREATE INDEX IF NOT EXISTS seite_arbeit ON seite(arbeit_id);
-CREATE INDEX IF NOT EXISTS zeichen_seite ON zeichen(seite_id);
-"""
+""" + ZEICHEN_TABELLE.format(name="zeichen") + ZEICHEN_INDEX
 
 AUFGABE_FELDER = ("titel", "fach", "jahrgang", "kategorien", "verfahren", "vorschlag_in_ausgabe")
 ANALYSE_STATUS = ("neu", "wartet", "laeuft", "fertig", "fehlgeschlagen")
@@ -200,6 +207,39 @@ class Speicher:
         with self._verbindung() as db:
             db.execute("PRAGMA journal_mode = WAL")  # bleibt in der Datei gespeichert
             db.executescript(SCHEMA)
+        self._schema_nachziehen()
+
+    def _schema_nachziehen(self):
+        """Bringt eine Datenbank eines älteren Stands auf das heutige Schema.
+
+        Alles läuft in einer Transaktion und nur, soweit es noch fehlt; ein zweiter Aufruf
+        ändert nichts. Bricht etwas ab, bleibt die Datenbank, wie sie war.
+        """
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if "stand" not in {z["name"] for z in db.execute("PRAGMA table_info(arbeit)")}:
+                db.execute("ALTER TABLE arbeit ADD COLUMN stand INTEGER NOT NULL DEFAULT 0")
+            angelegt = db.execute("SELECT sql FROM sqlite_master WHERE type = 'table'"
+                                  " AND name = 'zeichen'").fetchone()["sql"]
+            if "AUTOINCREMENT" in angelegt.upper():
+                return
+            # Die Tabelle neu anlegen und die Zeilen mit ihren ids übernehmen. Auf die
+            # Zeichen verweist keine andere Tabelle; ihr eigener Fremdschlüssel auf die
+            # Seite steht in der neuen Tabelle wieder.
+            db.execute("DROP TABLE IF EXISTS zeichen_neu")
+            db.execute(ZEICHEN_TABELLE.format(name="zeichen_neu"))
+            alt = {z["name"] for z in db.execute("PRAGMA table_info(zeichen)")}
+            spalten = ", ".join(z["name"] for z in db.execute("PRAGMA table_info(zeichen_neu)")
+                                if z["name"] in alt)
+            db.execute(f"INSERT INTO zeichen_neu ({spalten}) SELECT {spalten} FROM zeichen"
+                       " ORDER BY id")
+            db.execute("DROP TABLE zeichen")
+            db.execute("ALTER TABLE zeichen_neu RENAME TO zeichen")
+            db.execute(ZEICHEN_INDEX)
+            # Neue ids liegen über allen bisherigen.
+            db.execute("DELETE FROM sqlite_sequence WHERE name IN ('zeichen', 'zeichen_neu')")
+            db.execute("INSERT INTO sqlite_sequence (name, seq)"
+                       " SELECT 'zeichen', COALESCE(MAX(id), 0) FROM zeichen")
 
     def bildpfad(self, bilddatei):
         return self.bilder / Path(bilddatei).name
@@ -450,9 +490,11 @@ class Speicher:
     def arbeit(self, id):
         """Eine Arbeit mit ihren Seiten und je Seite den Zeichen (auch den verworfenen).
 
-        Dazu bestaetigung (dict oder None), bestaetigbar und bestaetigbar_grund.
+        Dazu bestaetigung (dict oder None), bestaetigbar, bestaetigbar_grund und `stand`,
+        der Änderungszähler der Arbeit.
         """
         with self._verbindung() as db:
+            db.execute("BEGIN")  # ein Schnappschuss: `stand` passt zu Seiten und Zeichen
             return self._arbeit_lesen(db, id)
 
     @staticmethod
@@ -488,7 +530,8 @@ class Speicher:
         """Setzt den Analysestatus und die genannten Felder.
 
         Mit `lauf` wird nur geschrieben, wenn dieser Lauf noch der aktuelle der Seite ist.
-        Gibt zurück, ob geschrieben wurde.
+        Gibt zurück, ob geschrieben wurde. Jeder andere Status als `fertig` hebt in
+        derselben Transaktion die Gesamtbestätigung der Arbeit auf.
         """
         if status not in ANALYSE_STATUS:
             raise ValueError(f"unbekannter Status: {status}")
@@ -503,17 +546,32 @@ class Speicher:
         if lauf is not None:
             bedingung, zusatz = "id = ? AND lauf = ?", (id, lauf)
         with self._verbindung() as db:
-            return db.execute(f"UPDATE seite SET {zuweisung} WHERE {bedingung}",
-                              (*werte.values(), *zusatz)).rowcount > 0
+            db.execute("BEGIN IMMEDIATE")
+            geschrieben = db.execute(f"UPDATE seite SET {zuweisung} WHERE {bedingung}",
+                                     (*werte.values(), *zusatz)).rowcount > 0
+            if geschrieben:
+                self._seitenstatus_geaendert(db, id, status)
+            return geschrieben
+
+    def _seitenstatus_geaendert(self, db, seite_id, status):
+        """Nach einem Wechsel des Analysestatus: Stand erhöhen; nur `fertig` lässt die
+        Bestätigung der Arbeit stehen."""
+        if status == "fertig":
+            self._stand_erhoehen(db, seite_id=seite_id)
+        else:
+            self._bestaetigung_leeren(db, seite_id=seite_id)
 
     def seite_lauf_beginnen(self, id):
         """Beginnt einen neuen Analyselauf: erhöht `lauf`, setzt Status `laeuft`.
 
         Gibt die Nummer des Laufs zurück, None, wenn es die Seite nicht (mehr) gibt.
+        Die Gesamtbestätigung der Arbeit verfällt dabei.
         """
         with self._verbindung() as db:
-            db.execute("UPDATE seite SET lauf = lauf + 1, analyse_status = 'laeuft',"
-                       " fehlermeldung = NULL WHERE id = ?", (id,))
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("UPDATE seite SET lauf = lauf + 1, analyse_status = 'laeuft',"
+                          " fehlermeldung = NULL WHERE id = ?", (id,)).rowcount:
+                self._seitenstatus_geaendert(db, id, "laeuft")
             zeile = db.execute("SELECT lauf FROM seite WHERE id = ?", (id,)).fetchone()
         return zeile["lauf"] if zeile else None
 
@@ -558,17 +616,47 @@ class Speicher:
             return [z[0] for z in db.execute(
                 "SELECT id FROM seite WHERE analyse_status IN ('wartet', 'laeuft') ORDER BY id")]
 
+    def seite_neuanalyse_vormerken(self, id):
+        """Merkt eine fertige oder fehlgeschlagene Seite für eine neue Analyse vor.
+
+        Prüfen, Status `wartet` und das Aufheben der Gesamtbestätigung laufen in einer
+        Transaktion: Dazwischen lässt sich die Arbeit nicht bestätigen. Gibt die id der
+        Arbeit zurück, None, wenn es die Seite nicht (mehr) gibt. `RegelFehler`, wenn die
+        Seite gerade analysiert wird oder noch nie analysiert wurde.
+        """
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            zeile = db.execute("SELECT arbeit_id, analyse_status FROM seite WHERE id = ?",
+                               (id,)).fetchone()
+            if zeile is None:
+                return None
+            if zeile["analyse_status"] not in ("fertig", "fehlgeschlagen"):
+                raise regeln.RegelFehler(
+                    "Diese Seite wird gerade analysiert oder wurde noch nie analysiert. "
+                    "Neu analysieren lassen sich nur fertige oder fehlgeschlagene Seiten.")
+            db.execute("UPDATE seite SET analyse_status = 'wartet', fehlermeldung = NULL"
+                       " WHERE id = ?", (id,))
+            self._bestaetigung_leeren(db, arbeit_id=zeile["arbeit_id"])
+            return zeile["arbeit_id"]
+
     # --- Zeichen bearbeiten (Etappe 2) --------------------------------------------------------
     # Jede Schreibmethode an Zeichen hebt in derselben Transaktion die Gesamtbestätigung
-    # der betroffenen Arbeit auf.
+    # der betroffenen Arbeit auf und erhöht ihren Änderungszähler `stand`. Der Zähler steigt
+    # mit jeder Transaktion, die Zeichen, Bestätigung oder den Analysestatus einer Seite der
+    # Arbeit ändert; wer einen Stand gesehen hat, erkennt daran jede spätere Änderung.
 
     @staticmethod
     def _bestaetigung_leeren(db, arbeit_id=None, seite_id=None):
-        if arbeit_id is None:
-            arbeit_id = db.execute("SELECT arbeit_id FROM seite WHERE id = ?",
-                                   (seite_id,)).fetchone()["arbeit_id"]
-        db.execute("UPDATE arbeit SET bestaetigt_am = NULL, bestaetigung = NULL WHERE id = ?",
-                   (arbeit_id,))
+        """Hebt die Gesamtbestätigung auf und erhöht den Stand der Arbeit."""
+        db.execute("UPDATE arbeit SET bestaetigt_am = NULL, bestaetigung = NULL,"
+                   " stand = stand + 1 WHERE id = COALESCE(?, (SELECT arbeit_id FROM seite"
+                   " WHERE id = ?))", (arbeit_id, seite_id))
+
+    @staticmethod
+    def _stand_erhoehen(db, arbeit_id=None, seite_id=None):
+        """Erhöht den Stand der Arbeit; die Gesamtbestätigung bleibt."""
+        db.execute("UPDATE arbeit SET stand = stand + 1 WHERE id = COALESCE(?,"
+                   " (SELECT arbeit_id FROM seite WHERE id = ?))", (arbeit_id, seite_id))
 
     def zeichen_eintrag(self, id):
         """Ein Zeichen mit `seite_id` und `arbeit_id`; None, wenn es das nicht (mehr) gibt."""
@@ -658,32 +746,65 @@ class Speicher:
 
     # --- Gesamtbestätigung und Kürzel der Arbeit ----------------------------------------------
 
-    def arbeit_bestaetigen(self, arbeit_id, zahlen=None):
+    @staticmethod
+    def _stand_pruefen(arbeit, stand):
+        if stand is not None and stand != arbeit["stand"]:
+            raise regeln.RegelFehler("Die Korrektur wurde inzwischen geändert. Bitte den "
+                                     "aktuellen Stand ansehen und dann noch einmal bestätigen.")
+
+    def arbeit_bestaetigen(self, arbeit_id, stand=None):
         """Bestätigt die Korrektur der Arbeit: setzt `bestaetigt_am` und `bestaetigung`.
 
-        Prüfen und Schreiben laufen in einer Transaktion. `RegelFehler`, wenn die Arbeit
-        nicht bestätigbar ist oder die genannten `zahlen` (die der Dialog gezeigt hat) nicht
-        mehr zum Stand passen. Ohne `zahlen` gelten die des aktuellen Stands. Gibt die
-        gespeicherten Zahlen zurück, None, wenn es die Arbeit nicht (mehr) gibt.
+        Die einzige Stelle, die die Gesamtbestätigung setzt. Prüfen und Schreiben laufen in
+        einer Transaktion. `RegelFehler`, wenn der genannte `stand` (den der Dialog gezeigt
+        hat) nicht mehr der Stand der Arbeit ist oder die Arbeit nicht bestätigbar ist.
+        Ohne `stand` entfällt dieser Vergleich. Die Zahlen berechnet der Speicher; er gibt
+        sie zurück, None, wenn es die Arbeit nicht (mehr) gibt.
         """
         with self._verbindung() as db:
             db.execute("BEGIN IMMEDIATE")
             arbeit = self._arbeit_lesen(db, arbeit_id)
             if arbeit is None:
                 return None
+            self._stand_pruefen(arbeit, stand)
             if not arbeit["bestaetigbar"]:
                 raise regeln.RegelFehler(arbeit["bestaetigbar_grund"])
-            aktuell = regeln.zahlen([z for seite in arbeit["seiten"] for z in seite["zeichen"]])
-            if zahlen is not None and dict(zahlen) != aktuell:
-                raise regeln.RegelFehler("Die Zeichen der Arbeit wurden inzwischen geändert. "
-                                         "Bitte die Zahlen noch einmal ansehen.")
-            db.execute("UPDATE arbeit SET bestaetigt_am = ?, bestaetigung = ? WHERE id = ?",
-                       (_jetzt(), json.dumps(aktuell), arbeit_id))
-            return aktuell
+            zahlen = regeln.zahlen([z for seite in arbeit["seiten"] for z in seite["zeichen"]])
+            db.execute("UPDATE arbeit SET bestaetigt_am = ?, bestaetigung = ?,"
+                       " stand = stand + 1 WHERE id = ?",
+                       (_jetzt(), json.dumps(zahlen), arbeit_id))
+            return zahlen
+
+    def rest_bestaetigen(self, arbeit_id, stand=None):
+        """Bestätigt alle offenen Zeichen der Arbeit gesammelt, in einer Transaktion.
+
+        `RegelFehler`, wenn der genannte `stand` nicht mehr der Stand der Arbeit ist oder
+        eine Seite der Arbeit nicht fertig analysiert ist (eine laufende Analyse ersetzt
+        die offenen Vorschläge). Gibt die ids der bestätigten Zeichen zurück, None, wenn es
+        die Arbeit nicht (mehr) gibt. Ohne offenes Zeichen wird nichts geschrieben.
+        """
+        with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
+            arbeit = self._arbeit_lesen(db, arbeit_id)
+            if arbeit is None:
+                return None
+            self._stand_pruefen(arbeit, stand)
+            grund = regeln.unfertige_seite(arbeit["seiten"])
+            if grund:
+                raise regeln.RegelFehler(f"{grund} Solange nicht alle Seiten der Arbeit fertig "
+                                         "analysiert sind, wird nichts gesammelt bestätigt.")
+            ids = regeln.offene([z for seite in arbeit["seiten"] for z in seite["zeichen"]])
+            zuweisung = ", ".join(f"{feld} = ?" for feld in regeln.REST_BESTAETIGEN)
+            db.executemany(f"UPDATE zeichen SET {zuweisung} WHERE id = ?",
+                           [(*regeln.REST_BESTAETIGEN.values(), id) for id in ids])
+            if ids:
+                self._bestaetigung_leeren(db, arbeit_id=arbeit_id)
+            return ids
 
     def arbeit_bestaetigung_aufheben(self, arbeit_id):
-        """Hebt die Gesamtbestätigung auf, etwa beim Start einer Neuanalyse."""
+        """Hebt die Gesamtbestätigung auf."""
         with self._verbindung() as db:
+            db.execute("BEGIN IMMEDIATE")
             self._bestaetigung_leeren(db, arbeit_id=arbeit_id)
 
     def arbeit_kuerzel_setzen(self, arbeit_id, kuerzel):

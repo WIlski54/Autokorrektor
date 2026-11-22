@@ -52,11 +52,12 @@ class Warteschlange:
         Eine Seite, die in dieser Warteschlange schon ansteht oder gerade läuft, wird
         nicht doppelt eingereiht. Auf den Status in der Datenbank kommt es dabei nicht an:
         Eine Seite, die dort schon `wartet` (frisch angelegt oder nach einem Abbruch),
-        wird eingereiht.
+        wird eingereiht. Gibt False zurück, wenn die Seite schon anstand und deshalb nichts
+        geschah, sonst True.
         """
         with self._zustand:
             if seite_id in self._anstehend:
-                return
+                return False
             self._anstehend.add(seite_id)
         try:
             self.speicher.seite_status(seite_id, "wartet", fehlermeldung=None)
@@ -67,6 +68,7 @@ class Warteschlange:
             self._erledigt(seite_id)
             if not self._halt.is_set():
                 raise fehler
+        return True
 
     def wiederaufnehmen(self, hindernis=None):
         """Reiht nach einem Neustart alle Seiten ein, die noch warten oder als laufend gelten.
