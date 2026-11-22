@@ -134,6 +134,16 @@ def test_woerter_fassen_gross_und_kleinschreibung_zusammen(speicher):
         {"gelesen": "Fahrad", "vorschlag": "Fahrrad", "anzahl": 5, "arbeiten": 2}]
 
 
+def test_woerter_halten_eszett_und_doppel_s_getrennt(speicher):
+    # „Fuss“ statt „Fuß“ ist selbst ein Rechtschreibfehler: Die Schreibungen bleiben getrennt.
+    nr = _aufgabe(speicher)
+    _arbeit(speicher, nr, _z(gelesen="Fuss", vorschlag="Fuß"), _z(gelesen="fuss", vorschlag="Fuß"),
+            _z(gelesen="fuß", vorschlag="Fuß"), _z(gelesen="Fuß", vorschlag="Fuß"),
+            _z(gelesen="FUSS", vorschlag="Fuß"))
+    woerter = uebersicht.stapel(speicher, nr)["woerter"]
+    assert [(w["gelesen"], w["anzahl"]) for w in woerter] == [("Fuss", 3), ("fuß", 2)]
+
+
 def test_woerter_nur_rechtschreibung_und_nur_typ_wort(speicher):
     nr = _aufgabe(speicher)
     _arbeit(speicher, nr,
@@ -225,11 +235,11 @@ def _daten(arbeiten, kuerzel=("R", "Z")):
 
 def test_csv_hat_kopfzeile_semikolon_und_crlf():
     daten = _daten([
-        {"kuerzel": "01", "seiten": 2, "je_kategorie": {"R": 3, "Z": 0}, "summe": 3},
-        {"kuerzel": "02", "seiten": 1, "je_kategorie": {"R": 0, "Z": 1}, "summe": 1}])
+        {"kuerzel": "Anton", "seiten": 2, "je_kategorie": {"R": 3, "Z": 0}, "summe": 3},
+        {"kuerzel": "Berta", "seiten": 1, "je_kategorie": {"R": 0, "Z": 1}, "summe": 1}])
     assert uebersicht.als_csv(daten) == ("Arbeit;Seiten;R;Z;Summe\r\n"
-                                         "01;2;3;0;3\r\n"
-                                         "02;1;0;1;1\r\n")
+                                         "Anton;2;3;0;3\r\n"
+                                         "Berta;1;0;1;1\r\n")
 
 
 def test_csv_aus_dem_speicher_in_stapelreihenfolge(speicher):
@@ -246,8 +256,8 @@ def test_csv_ohne_bestaetigte_arbeit_hat_nur_die_kopfzeile():
 
 
 def test_csv_fehlende_kategorie_einer_arbeit_ist_null():
-    daten = _daten([{"kuerzel": "01", "seiten": 1, "je_kategorie": {"R": 2}, "summe": 2}])
-    assert uebersicht.als_csv(daten).splitlines()[1] == "01;1;2;0;2"
+    daten = _daten([{"kuerzel": "A1", "seiten": 1, "je_kategorie": {"R": 2}, "summe": 2}])
+    assert uebersicht.als_csv(daten).splitlines()[1] == "A1;1;2;0;2"
 
 
 @pytest.mark.parametrize("kuerzel, zelle", [
@@ -257,6 +267,38 @@ def test_csv_schuetzt_vor_formeln(kuerzel, zelle):
     daten = _daten([{"kuerzel": kuerzel, "seiten": 1, "je_kategorie": {"R": 1, "Z": 0},
                      "summe": 1}])
     assert uebersicht.als_csv(daten).split("\r\n")[1] == f"{zelle};1;1;0;1"
+
+
+@pytest.mark.parametrize("kuerzel", ["01", "007", "1-2", "3/4", "1.5", "1,5", "12", "1.2.2026",
+                                     "12:30", "1e5", "50%", " 7 ", "2 000"])
+def test_csv_haelt_text_der_wie_zahl_oder_datum_aussieht_als_text(kuerzel):
+    # Excel liest `="01"` als Text 01; ohne das würde aus 01 die Zahl 1, aus 1-2 ein Datum.
+    daten = _daten([{"kuerzel": kuerzel, "seiten": 1, "je_kategorie": {"R": 1, "Z": 0},
+                     "summe": 1}])
+    assert uebersicht.als_csv(daten).split("\r\n")[1] == f'"=""{kuerzel}""";1;1;0;1'
+
+
+@pytest.mark.parametrize("kuerzel", ["7b", "A1", "Nr. 3", "3 a", "1.Mai", "Anton", "", "e5", "1-b"])
+def test_csv_laesst_gewoehnlichen_text_unveraendert(kuerzel):
+    daten = _daten([{"kuerzel": kuerzel, "seiten": 1, "je_kategorie": {"R": 1, "Z": 0},
+                     "summe": 1}])
+    assert uebersicht.als_csv(daten).split("\r\n")[1] == f"{kuerzel};1;1;0;1"
+
+
+def test_csv_zahlenspalten_bleiben_zahlen_und_kopfzeile_ist_geschuetzt():
+    # Auch ein Kürzel der Kopfzeile, das wie eine Zahl aussieht, bleibt Text; die Zahlen der
+    # Spalten Seiten, Anzahl und Summe stehen ohne Zusatz.
+    daten = _daten([{"kuerzel": "01", "seiten": 12, "je_kategorie": {"R": 30, "1": 7},
+                     "summe": 37}], kuerzel=("R", "1"))
+    assert uebersicht.als_csv(daten) == ('Arbeit;Seiten;R;"=""1""";Summe\r\n'
+                                         '"=""01""";12;30;7;37\r\n')
+
+
+def test_csv_aus_dem_speicher_haelt_die_laufenden_nummern_als_text(speicher):
+    nr = _aufgabe(speicher)
+    _arbeit(speicher, nr, _z("R"))
+    assert uebersicht.als_csv(uebersicht.stapel(speicher, nr)) == (
+        'Arbeit;Seiten;R;Summe\r\n"=""01""";1;1;1\r\n')
 
 
 def test_csv_schuetzt_auch_die_kopfzeile_und_setzt_anfuehrungszeichen():

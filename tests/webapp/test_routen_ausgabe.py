@@ -4,7 +4,7 @@ import re
 import pytest
 from werkzeug.http import parse_options_header
 
-from webapp import uebersicht
+from webapp import routen, uebersicht
 # Die Testhilfen und Vorrichtungen der Etappe 1 gelten unverändert.
 from tests.webapp.test_routen import (  # noqa: F401
     _aufgabe, _bild, _daten, _mit_zeichen, _text, _zeichen, app, client, schein, schlange,
@@ -98,12 +98,100 @@ def test_pdf_nach_verfallener_bestaetigung_ergibt_409(client, speicher):
     _ist_fehlerseite(client.get(f"/arbeit/{arbeit_id}/pdf"), 409)
 
 
-def test_pdf_mit_fehlendem_foto_ergibt_409_mit_fehlerseite(client, speicher):
+@pytest.mark.parametrize("defekt", [False, True])
+def test_pdf_mit_fehlendem_oder_defektem_foto_ergibt_500_mit_fehlerseite(client, speicher, defekt):
     nr = _aufgabe(speicher)
     arbeit_id = _arbeit(speicher, nr)
     seite = speicher.arbeit(arbeit_id)["seiten"][0]
-    speicher.bildpfad(seite["bilddatei"]).unlink()
-    assert "Foto" in _ist_fehlerseite(client.get(f"/arbeit/{arbeit_id}/pdf"), 409)
+    pfad = speicher.bildpfad(seite["bilddatei"])
+    if defekt:
+        pfad.write_bytes(b"kein Bild")
+    else:
+        pfad.unlink()
+    # Kein Zustand der Korrektur (409), sondern ein Fehler der Daten: 500 mit derselben Seite.
+    text = _ist_fehlerseite(client.get(f"/arbeit/{arbeit_id}/pdf"), 500)
+    assert "Foto" in text and f'href="/arbeit/{arbeit_id}"' in text
+    text = _ist_fehlerseite(client.get(f"/aufgabe/{nr}/pdf"), 500)
+    assert "Foto" in text and f'href="/aufgabe/{nr}"' in text
+
+
+# --- Antwortköpfe der Downloads -------------------------------------------------------------
+
+SCHWIERIG = ["Łukasz", "Erörterung 日本", "Größe Äöü ß", 'An"führung\'s"zeichen', "Zeile\r\numbruch",
+             "日本語" * 1700, "Ł" * 5000, "a" * 5000, "ä-" * 2500]
+
+
+def _koepfe_pruefen(antwort):
+    """Jeder Kopf lässt sich als Latin-1 senden (sonst bricht der Server die Antwort ab)."""
+    assert antwort.status_code == 200
+    for name, wert in antwort.headers:
+        (name + ": " + wert).encode("latin-1")
+        assert "\r" not in wert and "\n" not in wert
+    kopf = antwort.headers["Content-Disposition"]
+    assert kopf.startswith("attachment") and len(kopf) < 1500
+    return kopf
+
+
+@pytest.mark.parametrize("name", SCHWIERIG)
+def test_koepfe_der_downloads_sind_latin_1_und_kurz(client, speicher, name):
+    nr = _aufgabe(speicher, titel=name)
+    arbeit_id = _arbeit(speicher, nr, kuerzel=name.strip()[:20])   # länger darf keines sein
+    for url in (f"/arbeit/{arbeit_id}/pdf", f"/aufgabe/{nr}/pdf", f"/aufgabe/{nr}/uebersicht.csv"):
+        antwort = client.get(url)
+        kopf = _koepfe_pruefen(antwort)
+        assert antwort.headers["Cache-Control"] == "no-store"
+        # Der Name bleibt lesbar: höchstens 60 Zeichen je Teil.
+        assert len(_dateiname(antwort)) <= 2 * 60 + len("-Uebersicht.csv")
+        assert "filename=" in kopf
+
+
+def test_dateiname_mit_zeichen_ausserhalb_von_latin_1(client, speicher):
+    nr = _aufgabe(speicher, titel="Erörterung 日本")
+    arbeit_id = _arbeit(speicher, nr, kuerzel="Łukasz")
+    antwort = client.get(f"/arbeit/{arbeit_id}/pdf")
+    kopf = _koepfe_pruefen(antwort)
+    # Ein Ersatz in ASCII und daneben der volle Name nach RFC 5987.
+    assert "filename*=UTF-8''" in kopf and re.search(r'filename="?Arbeit-ukasz\.pdf"?', kopf)
+    assert _dateiname(antwort) == "Arbeit-Łukasz.pdf"
+    assert _dateiname(client.get(f"/aufgabe/{nr}/pdf")) == "Erörterung_日本-Sammel.pdf"
+
+
+def test_namensteile_werden_auf_60_zeichen_gekuerzt(client, speicher):
+    nr = _aufgabe(speicher, titel="T" * 200)
+    _arbeit(speicher, nr)
+    _arbeit(speicher, nr, bestaetigen=False)
+    assert _dateiname(client.get(f"/aufgabe/{nr}/pdf")) == "T" * 60 + "-Sammel-1-von-2.pdf"
+    assert _dateiname(client.get(f"/aufgabe/{nr}/uebersicht.csv")) == "T" * 60 + "-Uebersicht.csv"
+    assert routen._dateiname("a" * 61, "_" + "b" * 70, "…", endung="pdf") == (
+        "a" * 60 + "-" + "b" * 60 + ".pdf")
+
+
+def test_koepfe_gehen_durch_den_echten_server(app, speicher):
+    """Am Werkzeug-Server selbst: Die Antwort kommt an, auch mit Ł und CJK im Namen."""
+    import http.client
+    import threading
+
+    from werkzeug.serving import make_server
+
+    nr = _aufgabe(speicher, titel="Erörterung 日本")
+    arbeit_id = _arbeit(speicher, nr, kuerzel="Łukasz")
+    server = make_server("127.0.0.1", 0, app)
+    faden = threading.Thread(target=server.serve_forever, daemon=True)
+    faden.start()
+    try:
+        for url in (f"/arbeit/{arbeit_id}/pdf", f"/aufgabe/{nr}/pdf",
+                    f"/aufgabe/{nr}/uebersicht.csv"):
+            verbindung = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=20)
+            verbindung.request("GET", url)
+            antwort = verbindung.getresponse()
+            daten = antwort.read()
+            verbindung.close()
+            assert antwort.status == 200 and daten
+            assert "UTF-8''" in antwort.getheader("Content-Disposition")
+    finally:
+        server.shutdown()
+        faden.join(timeout=5)
+        server.server_close()
 
 
 # --- Sammel-PDF -----------------------------------------------------------------------------
@@ -117,8 +205,17 @@ def test_sammel_pdf_enthaelt_die_bestaetigten_arbeiten(client, speicher):
     assert antwort.status_code == 200
     assert antwort.mimetype == "application/pdf"
     assert antwort.headers["Cache-Control"] == "no-store"
-    assert _dateiname(antwort) == "Versuchsbeschreibung-Sammel.pdf"
+    # Eine Arbeit fehlt: Der Dateiname sagt es, der Titel im PDF nicht.
+    assert _dateiname(antwort) == "Versuchsbeschreibung-Sammel-2-von-3.pdf"
     assert antwort.data.startswith(b"%PDF") and _seitenzahl(antwort.data) == 3
+    assert b" von " not in antwort.data
+
+
+def test_sammel_pdf_ohne_fehlende_arbeiten_heisst_nur_sammel(client, speicher):
+    nr = _aufgabe(speicher)
+    _arbeit(speicher, nr)
+    _arbeit(speicher, nr)
+    assert _dateiname(client.get(f"/aufgabe/{nr}/pdf")) == "Versuchsbeschreibung-Sammel.pdf"
 
 
 def test_dateiname_des_sammel_pdf_wird_gesaeubert(client, speicher):
@@ -230,7 +327,7 @@ def test_csv_download_mit_bom(client, speicher):
     _arbeit(speicher, nr, kuerzel="=1+1")
     antwort = client.get(f"/aufgabe/{nr}/uebersicht.csv")
     assert antwort.status_code == 200
-    assert antwort.mimetype == "text/csv" and antwort.mimetype_params["charset"] == "utf-8"
+    assert antwort.headers["Content-Type"] == "text/csv; charset=utf-8"   # genau ein charset
     assert antwort.headers["Cache-Control"] == "no-store"
     assert _dateiname(antwort) == "Erörterung_9b-Uebersicht.csv"
     assert antwort.data.startswith(BOM) and antwort.data.count(BOM) == 1

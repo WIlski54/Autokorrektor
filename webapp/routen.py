@@ -1,11 +1,12 @@
 """Alle Seiten und JSON-Schnittstellen der Etappen 1 bis 3."""
+import io
 import math
 import re
 import time
 from urllib.parse import urlsplit
 
 from flask import (Blueprint, Response, abort, current_app, flash, redirect, render_template,
-                   request, url_for)
+                   request, send_file, url_for)
 from werkzeug.exceptions import HTTPException
 
 from webapp import ausgabe, regeln, uebersicht
@@ -596,52 +597,76 @@ def seite_neu_analysieren(seite_id):
 # Ausgegeben werden nur Arbeiten, deren Korrektur insgesamt bestätigt ist. Die Antworten
 # sind Downloads und werden nie zwischengespeichert: Sie zeigen den Stand der Korrektur.
 
+NAMENSTEIL_LAENGE = 60  # Zeichen je Teil eines Dateinamens
+
+
 def _dateiname(*teile, endung):
     """Ein Dateiname nur aus Buchstaben, Ziffern, Bindestrich und Unterstrich.
 
-    Alles andere wird zu einem Unterstrich; Teile, von denen nichts bleibt, entfallen.
+    Alles andere wird zu einem Unterstrich; Teile, von denen nichts bleibt, entfallen. Jeder
+    Teil ist höchstens NAMENSTEIL_LAENGE Zeichen lang, damit der Antwortkopf kurz bleibt.
     """
-    sauber = [re.sub(r"_+", "_", re.sub(r"[^\w-]", "_", teil)).strip("_") for teil in teile]
+    sauber = [re.sub(r"_+", "_", re.sub(r"[^\w-]", "_", str(teil))).strip("_")
+              [:NAMENSTEIL_LAENGE].strip("_") for teil in teile]
     return "-".join(teil for teil in sauber if teil) + "." + endung
 
 
 def _download(daten, mimetype, dateiname):
-    antwort = Response(daten, mimetype=mimetype)
-    antwort.headers.set("Content-Disposition", "attachment", filename=dateiname)
+    """Die Bytes als Download.
+
+    `send_file` nennt den Dateinamen so, dass der Kopf auch bei Zeichen außerhalb von
+    Latin-1 gültig bleibt: ein Ersatz in ASCII und daneben `filename*=UTF-8''…`.
+    """
+    antwort = send_file(io.BytesIO(daten), mimetype=mimetype, as_attachment=True,
+                        download_name=dateiname)
     antwort.headers["Cache-Control"] = "no-store"
     return antwort
 
 
-def _nicht_ausgebbar(fehler, zurueck, zurueck_text):
-    """Die Fehlerseite, wenn sich (noch) nichts ausgeben lässt: 409 mit dem Weg zurück."""
-    return render_template("fehler.html", text=str(fehler), code=409, zurueck=zurueck,
-                           zurueck_text=zurueck_text), 409
+def _nicht_ausgebbar(fehler, zurueck, zurueck_text, code=409):
+    """Die Fehlerseite mit dem Weg zurück: 409, wenn (noch) nichts bestätigt ist; 500, wenn
+    die Ausgabe selbst scheitert (Foto fehlt oder ist defekt)."""
+    return render_template("fehler.html", text=str(fehler), code=code, zurueck=zurueck,
+                           zurueck_text=zurueck_text), code
 
 
 @seiten.get("/arbeit/<int:arbeit_id>/pdf")
 def arbeit_pdf(arbeit_id):
-    """Das PDF einer bestätigten Arbeit als Download; nicht bestätigt ergibt 409."""
+    """Das PDF einer bestätigten Arbeit als Download; nicht bestätigt ergibt 409, ein
+    fehlendes oder defektes Foto 500."""
     arbeit = _speicher().arbeit(arbeit_id)
     if arbeit is None:
         abort(404)
+    zurueck = url_for("seiten.arbeit", arbeit_id=arbeit_id), "Zurück zur Korrektur der Arbeit"
     try:
         pdf = ausgabe.arbeit_als_pdf(_speicher(), arbeit_id)
     except regeln.RegelFehler as fehler:
-        return _nicht_ausgebbar(fehler, url_for("seiten.arbeit", arbeit_id=arbeit_id),
-                                "Zurück zur Korrektur der Arbeit")
+        return _nicht_ausgebbar(fehler, *zurueck)
+    except ausgabe.AusgabeFehler as fehler:
+        return _nicht_ausgebbar(fehler, *zurueck, code=500)
     return _download(pdf, "application/pdf", _dateiname("Arbeit", arbeit["kuerzel"], endung="pdf"))
 
 
 @seiten.get("/aufgabe/<int:aufgabe_id>/pdf")
 def aufgabe_pdf(aufgabe_id):
-    """Das Sammel-PDF aller bestätigten Arbeiten; ohne bestätigte Arbeit 409."""
+    """Das Sammel-PDF aller bestätigten Arbeiten; ohne bestätigte Arbeit 409, ein fehlendes
+    oder defektes Foto 500.
+
+    Fehlen Arbeiten, weil sie nicht bestätigt sind, nennt der Dateiname die Zahlen:
+    `<Titel>-Sammel-<enthalten>-von-<alle>.pdf`.
+    """
     aufgabe = _aufgabe_oder_404(aufgabe_id)
+    zurueck = url_for("seiten.stapel", aufgabe_id=aufgabe_id), "Zurück zum Stapel"
     try:
-        pdf, _, _ = ausgabe.aufgabe_als_pdf(_speicher(), aufgabe_id)
+        pdf, enthalten, fehlend = ausgabe.aufgabe_als_pdf(_speicher(), aufgabe_id)
     except regeln.RegelFehler as fehler:
-        return _nicht_ausgebbar(fehler, url_for("seiten.stapel", aufgabe_id=aufgabe_id),
-                                "Zurück zum Stapel")
-    return _download(pdf, "application/pdf", _dateiname(aufgabe["titel"], "Sammel", endung="pdf"))
+        return _nicht_ausgebbar(fehler, *zurueck)
+    except ausgabe.AusgabeFehler as fehler:
+        return _nicht_ausgebbar(fehler, *zurueck, code=500)
+    teile = [aufgabe["titel"], "Sammel"]
+    if fehlend:
+        teile.append(f"{enthalten}-von-{enthalten + fehlend}")
+    return _download(pdf, "application/pdf", _dateiname(*teile, endung="pdf"))
 
 
 @seiten.get("/aufgabe/<int:aufgabe_id>/uebersicht")
@@ -658,7 +683,8 @@ def stapeluebersicht_csv(aufgabe_id):
     """Die Tabelle je Arbeit als CSV; UTF-8 mit BOM, damit Excel Umlaute richtig liest."""
     aufgabe = _aufgabe_oder_404(aufgabe_id)
     inhalt = uebersicht.als_csv(uebersicht.stapel(_speicher(), aufgabe_id))
-    return _download(inhalt.encode("utf-8-sig"), "text/csv; charset=utf-8",
+    # Den Zeichensatz hängt Flask bei Textarten selbst an: genau ein `charset=utf-8`.
+    return _download(inhalt.encode("utf-8-sig"), "text/csv",
                      _dateiname(aufgabe["titel"], "Uebersicht", endung="csv"))
 
 

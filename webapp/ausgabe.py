@@ -41,6 +41,14 @@ SCHRIFTEN_FETT = ("segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf",
                   "LiberationSans-Bold.ttf", "Arial Bold.ttf")
 
 
+class AusgabeFehler(Exception):
+    """Die Ausgabe scheitert an den Daten selbst: Ein Foto fehlt oder ist nicht lesbar.
+
+    Anders als ein `RegelFehler` ist das kein Zustand, den die Lehrkraft in der Korrektur
+    herstellt oder behebt; die Routen antworten mit 500.
+    """
+
+
 def farbe(kategorie):
     """Die Farbe einer Kategorie als (r, g, b)."""
     return FARBEN.get(kategorie, FARBE_EIGEN)
@@ -97,11 +105,18 @@ def kuerzen(text, schriftart, breite):
     """Der Text, wenn er in die Breite passt; sonst gekürzt mit „…“, notfalls leer."""
     if schriftart.getlength(text) <= breite:
         return text
-    for laenge in range(len(text) - 1, 0, -1):
-        kurz = text[:laenge].rstrip() + "…"
-        if schriftart.getlength(kurz) <= breite:
-            return kurz
-    return ""
+    def kurz(laenge):
+        return text[:laenge].rstrip() + "…"
+
+    # Die längste passende Kürzung, gesucht durch Halbieren (auch sehr lange Texte gehen schnell).
+    passt, zu_lang = 0, len(text)
+    while zu_lang - passt > 1:
+        laenge = (passt + zu_lang) // 2
+        if schriftart.getlength(kurz(laenge)) <= breite:
+            passt = laenge
+        else:
+            zu_lang = laenge
+    return kurz(passt) if passt else ""
 
 
 # --- Textzeilen -----------------------------------------------------------------------------
@@ -382,6 +397,10 @@ def _fotobreite(breite, hoehe, vorschlag_zeigen, uebersicht):
     return b
 
 
+# Was Pillow bei einem fehlenden, abgeschnittenen oder sonst defekten Foto auslöst.
+FOTO_FEHLER = (OSError, ValueError, SyntaxError, Image.DecompressionBombError)
+
+
 def _foto_laden(pfad, vorschlag_zeigen, uebersicht):
     """Lädt das Foto aufrecht und in der Größe für die Ausgabe: (bild, faktor)."""
     with Image.open(pfad) as roh:
@@ -406,7 +425,8 @@ def seitenbilder(speicher, aufgabe, arbeit, eigene=None):
 
     `arbeit` ist eine Arbeit, wie `speicher.arbeit` sie liefert. Jede Seite trägt den Kopf
     mit Aufgabentitel, Kürzel der Arbeit und Seitenzahl, die letzte die Fehlerübersicht.
-    Keine Kante ist länger als MAX_KANTE. `RegelFehler`, wenn das Foto einer Seite fehlt.
+    Keine Kante ist länger als MAX_KANTE. `AusgabeFehler`, wenn das Foto einer Seite fehlt
+    oder nicht lesbar ist.
     """
     if eigene is None:
         eigene = speicher.kuerzel()
@@ -417,9 +437,9 @@ def seitenbilder(speicher, aufgabe, arbeit, eigene=None):
         try:
             foto, faktor = _foto_laden(speicher.bildpfad(seite["bilddatei"]), vorschlag_zeigen,
                                        uebersicht)
-        except OSError as fehler:
-            raise RegelFehler(f"Das Foto zu Seite {nummer} der Arbeit {arbeit['kuerzel']} fehlt "
-                              "oder ist nicht lesbar. Das PDF wurde nicht erzeugt.") from fehler
+        except FOTO_FEHLER as fehler:
+            raise AusgabeFehler(f"Das Foto zu Seite {nummer} der Arbeit {arbeit['kuerzel']} fehlt "
+                                "oder ist nicht lesbar. Das PDF wurde nicht erzeugt.") from fehler
         kopf = f"{aufgabe['titel']} · Arbeit {arbeit['kuerzel']} · Seite {nummer} von {seitenzahl}"
         bild = seite_zeichnen(foto, _skaliert(seite["zeichen"], faktor), vorschlag_zeigen, kopf,
                               uebersicht)
@@ -485,5 +505,6 @@ def aufgabe_als_pdf(speicher, aufgabe_id):
     if not enthalten:
         raise RegelFehler("In dieser Aufgabe ist noch keine Korrektur bestätigt. Das Sammel-PDF "
                           "enthält nur Arbeiten nach „Korrektur gesamt bestätigen“.")
-    titel = f"{aufgabe['titel']} – {enthalten} von {len(reihe)} Arbeiten"
-    return _als_pdf(bilder, titel), enthalten, len(reihe) - enthalten
+    # Der Titel im PDF nennt nur die Aufgabe: Ein weitergegebenes PDF verrät nicht, wie viele
+    # Arbeiten fehlen. Die Zahlen stehen im Dateinamen des Downloads.
+    return _als_pdf(bilder, aufgabe["titel"]), enthalten, len(reihe) - enthalten

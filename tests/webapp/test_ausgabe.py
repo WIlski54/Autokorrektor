@@ -430,12 +430,37 @@ def test_unbekannte_arbeit_wirft_regelfehler(speicher):
         ausgabe.arbeit_als_pdf(speicher, 999)
 
 
-def test_fehlendes_foto_wirft_regelfehler_mit_seitennummer(speicher):
+def test_fehlendes_foto_wirft_ausgabefehler_mit_seitennummer(speicher):
     nr = _aufgabe(speicher)
     arbeit_id, (s1, s2) = _arbeit(speicher, nr, seitenzahl=2)
     speicher.bildpfad(speicher.seite(s2)["bilddatei"]).unlink()
-    with pytest.raises(RegelFehler, match="Seite 2"):
+    with pytest.raises(ausgabe.AusgabeFehler, match="Seite 2"):
         ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+    with pytest.raises(ausgabe.AusgabeFehler, match="Seite 2"):
+        ausgabe.aufgabe_als_pdf(speicher, nr)
+    assert not issubclass(ausgabe.AusgabeFehler, RegelFehler)
+
+
+@pytest.mark.parametrize("inhalt", [b"", b"kein Bild", None])
+def test_defektes_foto_wirft_ausgabefehler(speicher, inhalt):
+    nr = _aufgabe(speicher)
+    arbeit_id, (seite_id,) = _arbeit(speicher, nr)
+    pfad = speicher.bildpfad(speicher.seite(seite_id)["bilddatei"])
+    pfad.write_bytes(_jpeg()[:200] if inhalt is None else inhalt)   # None: abgeschnitten
+    with pytest.raises(ausgabe.AusgabeFehler, match="Seite 1"):
+        ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+
+
+def test_titel_im_pdf_nennt_nur_die_aufgabe(speicher):
+    # Ein weitergegebenes Sammel-PDF verrät nicht, wie viele Arbeiten fehlen.
+    nr = _aufgabe(speicher, titel="Versuch")
+    _arbeit(speicher, nr)
+    _arbeit(speicher, nr, bestaetigen=False)
+    pdf, enthalten, fehlend = ausgabe.aufgabe_als_pdf(speicher, nr)
+    assert (enthalten, fehlend) == (1, 1)
+    (titel,) = re.findall(rb"/Title \((.*?)\)", pdf)
+    assert titel.replace(b"\xfe\xff", b"").replace(b"\x00", b"") == b"Versuch"
+    assert b" von " not in pdf and b"Arbeiten" not in pdf
 
 
 def test_aufgabe_als_pdf_enthaelt_nur_bestaetigte_arbeiten(speicher):

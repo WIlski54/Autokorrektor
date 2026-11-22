@@ -6,11 +6,16 @@ Rangfolge. Arbeiten stehen immer in Stapelreihenfolge.
 """
 import csv
 import io
+import re
 from collections import Counter
 
 FESTE_KATEGORIEN = (("R", "Rechtschreibung"), ("Z", "Zeichensetzung"), ("Gr", "Grammatik"))
 MAX_WOERTER = 20
 FORMELZEICHEN = ("=", "+", "-", "@", "\t", "\r")
+# Text, den eine Tabellenkalkulation in eine Zahl oder ein Datum umwandeln würde: nur Ziffern
+# (auch mit führenden Nullen), Ziffern mit Punkt, Komma, Schrägstrich, Bindestrich, Doppelpunkt
+# oder Leerzeichen dazwischen, ein Prozentwert oder eine Zahl mit Exponent.
+WIE_ZAHL = re.compile(r"\s*\d(?:[\d\s.,/:-]*\d)?[.,]?\s*%?\s*|\s*\d+(?:[.,]\d+)?[eE][+-]?\d+\s*")
 
 _UMLAUTE = str.maketrans({"ä": "a", "ö": "o", "ü": "u", "ß": "ss"})
 
@@ -45,15 +50,17 @@ def _woerter(arbeiten):
     """Die häufigen Fehlerwörter: Rechtschreibzeichen vom Typ `wort`, nach `gelesen`.
 
     Zusammengefasst ohne Beachtung der Groß-/Kleinschreibung; gezeigt wird die häufigste
-    Schreibung und der häufigste Vorschlag (bei Gleichstand die zuerst gesehenen).
+    Schreibung und der häufigste Vorschlag (bei Gleichstand die zuerst gesehenen). „ß“ und
+    „ss“ bleiben getrennt (`lower`, nicht `casefold`): Gerade diese Verwechslung ist ein
+    Rechtschreibfehler.
     """
-    gruppen = {}   # gelesen ohne Großschreibung -> Schreibungen, Vorschläge, Arbeiten
+    gruppen = {}   # gelesen in Kleinbuchstaben -> Schreibungen, Vorschläge, Arbeiten
     for platz, arbeit in enumerate(arbeiten):
         for z in _bestaetigte_zeichen(arbeit):
             gelesen = " ".join((z["gelesen"] or "").split())
             if z["kategorie"] != "R" or z["typ"] != "wort" or not gelesen:
                 continue
-            gruppe = gruppen.setdefault(gelesen.casefold(), (Counter(), Counter(), set()))
+            gruppe = gruppen.setdefault(gelesen.lower(), (Counter(), Counter(), set()))
             gruppe[0][gelesen] += 1
             vorschlag = " ".join((z["vorschlag"] or "").split())
             if vorschlag:
@@ -106,16 +113,26 @@ def stapel(speicher, aufgabe_id):
 
 
 def _zelle(wert):
-    """Eine Zelle für die Tabellenkalkulation: Text, der wie eine Formel beginnt, wird entschärft."""
+    """Eine Textzelle für die Tabellenkalkulation.
+
+    Text, der wie eine Formel beginnt, wird mit einem Hochkomma entschärft. Text, der wie
+    eine Zahl oder ein Datum aussieht (`01`, `1-2`, `3/4`, `1.5`), steht als `="01"`, damit
+    Excel ihn nicht umwandelt. Zahlenspalten laufen nicht hier durch.
+    """
     text = str(wert)
-    return "'" + text if text.startswith(FORMELZEICHEN) else text
+    if text.startswith(FORMELZEICHEN):
+        return "'" + text
+    if WIE_ZAHL.fullmatch(text):
+        return f'="{text}"'
+    return text
 
 
 def als_csv(daten):
     """Die Tabelle je Arbeit als CSV-Text: Semikolon als Trennzeichen, Zeilenende `\\r\\n`.
 
     Kopfzeile `Arbeit;Seiten;<Kürzel…>;Summe`, dann eine Zeile je bestätigter Arbeit in
-    Stapelreihenfolge. `daten` ist das Ergebnis von `stapel`.
+    Stapelreihenfolge. `daten` ist das Ergebnis von `stapel`. Die Kürzel sind Textzellen
+    (siehe `_zelle`); Seiten, Anzahlen und Summe bleiben Zahlen.
     """
     kuerzel = [k["kuerzel"] for k in daten["kategorien"]]
     puffer = io.StringIO(newline="")
