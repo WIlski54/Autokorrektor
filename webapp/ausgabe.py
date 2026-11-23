@@ -9,6 +9,7 @@ Alle Maße hängen an der Breite des Fotos, damit die Seite bei jeder Auflösung
 Das PDF schreibt Pillow: je Seite ein Bild, keine weitere Abhängigkeit.
 """
 import io
+import threading
 from collections import Counter
 from functools import lru_cache
 
@@ -402,15 +403,27 @@ FOTO_FEHLER = (OSError, ValueError, SyntaxError, Image.DecompressionBombError)
 
 
 def _foto_laden(pfad, vorschlag_zeigen, uebersicht):
-    """Lädt das Foto aufrecht und in der Größe für die Ausgabe: (bild, faktor)."""
+    """Lädt das Foto aufrecht und in der Größe für die Ausgabe: (bild, faktor).
+
+    Wird ein JPEG ohnehin verkleinert, entpackt Pillow es gleich in halber, viertel oder
+    achtel Größe (`draft`), solange es dabei nicht kleiner wird als das Ziel. Das spart bei
+    sehr großen Fotos Arbeitsspeicher und Zeit; die Seite sieht gleich aus.
+    """
     with Image.open(pfad) as roh:
+        breite, hoehe = roh.size
+        gedreht = roh.getexif().get(0x0112) in (5, 6, 7, 8)   # liegt auf der Seite
+        if gedreht:
+            breite, hoehe = hoehe, breite
+        ziel = _fotobreite(breite, hoehe, vorschlag_zeigen, uebersicht)
+        ziel_h = max(1, round(hoehe * ziel / breite))
+        if ziel < breite and roh.format == "JPEG":
+            roh.draft("RGB", (ziel_h, ziel) if gedreht else (ziel, ziel_h))
         foto = ImageOps.exif_transpose(roh).convert("RGB")
-    breite, hoehe = foto.size
-    ziel = _fotobreite(breite, hoehe, vorschlag_zeigen, uebersicht)
     if ziel >= breite:
         return foto, 1
-    faktor = ziel / breite
-    return foto.resize((ziel, max(1, round(hoehe * faktor))), Image.LANCZOS), faktor
+    klein = foto.resize((ziel, ziel_h), Image.LANCZOS)
+    foto.close()
+    return klein, ziel / breite
 
 
 def _skaliert(zeichen, faktor):
@@ -443,17 +456,36 @@ def seitenbilder(speicher, aufgabe, arbeit, eigene=None):
         kopf = f"{aufgabe['titel']} · Arbeit {arbeit['kuerzel']} · Seite {nummer} von {seitenzahl}"
         bild = seite_zeichnen(foto, _skaliert(seite["zeichen"], faktor), vorschlag_zeigen, kopf,
                               uebersicht)
+        foto.close()
+        del foto
         if max(bild.size) > MAX_KANTE:   # etwa eine übervolle Randspalte
             bild.thumbnail((MAX_KANTE, MAX_KANTE), Image.LANCZOS)
         yield bild
+        del bild   # die Seite ist geschrieben; nichts hält sie bis zur nächsten fest
+
+
+def _seite_anhaengen(ziel, bild, titel, erste):
+    """Schreibt ein Seitenbild als nächste Seite an das Ende des PDF in `ziel`."""
+    ziel.seek(0)   # Pillow liest beim Anhängen das bisherige PDF von vorn
+    angaben = {"title": titel} if erste else {}   # der Titel bleibt beim Anhängen erhalten
+    bild.save(ziel, "PDF", resolution=AUFLOESUNG, quality=JPEG_QUALITAET, append=not erste,
+              **angaben)
 
 
 def _als_pdf(bilder, titel):
-    """Fasst die Seitenbilder zu einem PDF zusammen, je Seite ein Bild."""
-    erste, *weitere = bilder
+    """Fasst die Seitenbilder zu einem PDF zusammen, je Seite ein Bild.
+
+    `bilder` wird nacheinander abgerufen: Jede Seite wird sofort an das PDF angehängt und
+    danach freigegeben. Im Arbeitsspeicher liegt so immer nur ein Seitenbild, nicht der ganze
+    Stapel. Ohne Bilder ist das Ergebnis leer.
+    """
     puffer = io.BytesIO()
-    erste.save(puffer, "PDF", save_all=True, append_images=weitere, resolution=AUFLOESUNG,
-               quality=JPEG_QUALITAET, title=titel)
+    erste = True
+    for bild in bilder:
+        _seite_anhaengen(puffer, bild, titel, erste)
+        bild.close()
+        del bild
+        erste = False
     return puffer.getvalue()
 
 
@@ -476,8 +508,13 @@ def arbeit_als_pdf(speicher, arbeit_id):
     if aufgabe is None:
         raise RegelFehler("Die Korrektur dieser Arbeit ist nicht bestätigt. Ein PDF gibt es "
                           "erst nach „Korrektur gesamt bestätigen“.")
-    return _als_pdf(list(seitenbilder(speicher, aufgabe, arbeit)),
+    return _als_pdf(seitenbilder(speicher, aufgabe, arbeit),
                     f"{aufgabe['titel']} – Arbeit {arbeit['kuerzel']}")
+
+
+# Höchstens ein Sammel-PDF zur selben Zeit je Prozess: Eine zweite Anfrage wartet, statt den
+# Arbeitsspeicher ein zweites Mal zu belegen.
+_SAMMEL_SPERRE = threading.Lock()
 
 
 def aufgabe_als_pdf(speicher, aufgabe_id):
@@ -487,24 +524,31 @@ def aufgabe_als_pdf(speicher, aufgabe_id):
     `enthalten` und `fehlend` zählen die aufgenommenen und die nicht bestätigten Arbeiten.
     `RegelFehler`, wenn keine Arbeit bestätigt ist.
 
-    Alle Seiten liegen bis zum Schreiben als Bilder im Arbeitsspeicher (bis etwa 15 MB je
-    Seite); für einen Klassensatz reicht das.
+    Die Seiten werden einzeln gezeichnet und sofort an das PDF angehängt; im Arbeitsspeicher
+    liegen das wachsende PDF und ein Seitenbild. Es entsteht immer nur ein Sammel-PDF zur
+    selben Zeit.
     """
-    aufgabe = speicher.aufgabe(aufgabe_id)
-    reihe = speicher.arbeiten(aufgabe_id) if aufgabe else []
-    eigene = speicher.kuerzel()
-    bilder, enthalten = [], 0
-    for eintrag in reihe:
-        if eintrag["bestaetigt_am"] is None:
-            continue
-        arbeit = _bestaetigte_arbeit(speicher, eintrag["id"])   # ein Stand je Arbeit
-        if arbeit is None:
-            continue
-        bilder.extend(seitenbilder(speicher, aufgabe, arbeit, eigene))
-        enthalten += 1
+    with _SAMMEL_SPERRE:
+        aufgabe = speicher.aufgabe(aufgabe_id)
+        reihe = speicher.arbeiten(aufgabe_id) if aufgabe else []
+        eigene = speicher.kuerzel()
+        enthalten = 0
+
+        def seiten():
+            nonlocal enthalten
+            for eintrag in reihe:
+                if eintrag["bestaetigt_am"] is None:
+                    continue
+                arbeit = _bestaetigte_arbeit(speicher, eintrag["id"])   # ein Stand je Arbeit
+                if arbeit is None:
+                    continue
+                enthalten += 1
+                yield from seitenbilder(speicher, aufgabe, arbeit, eigene)
+
+        # Der Titel im PDF nennt nur die Aufgabe: Ein weitergegebenes PDF verrät nicht, wie
+        # viele Arbeiten fehlen. Die Zahlen stehen im Dateinamen des Downloads.
+        pdf = _als_pdf(seiten(), aufgabe["titel"] if aufgabe else "")
     if not enthalten:
         raise RegelFehler("In dieser Aufgabe ist noch keine Korrektur bestätigt. Das Sammel-PDF "
                           "enthält nur Arbeiten nach „Korrektur gesamt bestätigen“.")
-    # Der Titel im PDF nennt nur die Aufgabe: Ein weitergegebenes PDF verrät nicht, wie viele
-    # Arbeiten fehlen. Die Zahlen stehen im Dateinamen des Downloads.
-    return _als_pdf(bilder, aufgabe["titel"]), enthalten, len(reihe) - enthalten
+    return pdf, enthalten, len(reihe) - enthalten

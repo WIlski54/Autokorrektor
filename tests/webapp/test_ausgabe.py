@@ -1,9 +1,13 @@
 """Etappe 3: Seiten für die Ausgabe zeichnen und als PDF zusammenfassen."""
+import gc
 import io
 import re
+import threading
+import time
+import weakref
 
 import pytest
-from PIL import Image
+from PIL import Image, JpegImagePlugin, PdfParser
 
 from webapp import ausgabe
 from webapp.regeln import RegelFehler
@@ -375,8 +379,13 @@ def _arbeit(speicher, aufgabe_id, *zeichen, seitenzahl=1, groesse=(B, H), bestae
 
 
 def _seitenzahl(pdf):
-    """Zählt die Seitenobjekte im PDF (ohne den Seitenbaum `/Pages`)."""
-    return len(re.findall(rb"/Type\s*/Page\b(?!s)", pdf))
+    """Die Zahl der Seiten im gültigen Seitenbaum, wie ein Leseprogramm sie sieht.
+
+    Die Seiten werden einzeln angehängt; ältere Stände des Seitenbaums bleiben in der Datei
+    stehen und zählen nicht.
+    """
+    with PdfParser.PdfParser(f=io.BytesIO(pdf), mode="rb") as leser:
+        return len(leser.pages)
 
 
 def _bildmasse(pdf):
@@ -574,6 +583,132 @@ def test_sammel_pdf_beginnt_jede_arbeit_mit_seite_1_in_stapelreihenfolge(speiche
         ("Versuchsbeschreibung · Arbeit 01 · Seite 1 von 2", False),
         ("Versuchsbeschreibung · Arbeit 01 · Seite 2 von 2", True),
         ("Versuchsbeschreibung · Arbeit 02 · Seite 1 von 1", True)]
+
+
+# --- Speicherbedarf: Seiten einzeln schreiben -----------------------------------------------
+
+def test_sammel_pdf_mit_zwoelf_seiten_ist_vollstaendig(speicher):
+    nr = _aufgabe(speicher, titel="Zwölf Seiten")
+    for seitenzahl in (5, 4, 3):
+        _arbeit(speicher, nr, _z(), seitenzahl=seitenzahl)
+    pdf, enthalten, fehlend = ausgabe.aufgabe_als_pdf(speicher, nr)
+    assert (enthalten, fehlend) == (3, 0)
+    assert pdf.startswith(b"%PDF") and pdf.rstrip().endswith(b"%%EOF")
+    assert _seitenzahl(pdf) == 12 and len(_bildmasse(pdf)) == 12   # je Seite genau ein Bild
+    with PdfParser.PdfParser(f=io.BytesIO(pdf), mode="rb") as leser:
+        assert leser.info.Title == "Zwölf Seiten"
+
+
+def test_pdf_einer_arbeit_mit_zwoelf_seiten(speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id, _ = _arbeit(speicher, nr, _z(), seitenzahl=12)
+    pdf = ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+    assert pdf.startswith(b"%PDF") and pdf.rstrip().endswith(b"%%EOF")
+    assert _seitenzahl(pdf) == 12 and len(_bildmasse(pdf)) == 12
+
+
+@pytest.mark.parametrize("sammel", [False, True])
+def test_seiten_werden_einzeln_gezeichnet_geschrieben_und_freigegeben(speicher, monkeypatch,
+                                                                      sammel):
+    nr = _aufgabe(speicher)
+    arbeit_id, _ = _arbeit(speicher, nr, _z(), seitenzahl=3)
+    _arbeit(speicher, nr, seitenzahl=2)
+    ablauf, bilder, lebend = [], [], []
+    zeichnen, anhaengen = ausgabe.seite_zeichnen, ausgabe._seite_anhaengen
+
+    def noch_da():
+        gc.collect()
+        return sum(1 for verweis in bilder if verweis() is not None)
+
+    def gezeichnet(*args, **kwargs):
+        lebend.append(noch_da())          # frühere Seiten, die beim Zeichnen noch leben
+        ablauf.append("zeichnen")
+        bild = zeichnen(*args, **kwargs)
+        bilder.append(weakref.ref(bild))
+        return bild
+
+    def geschrieben(ziel, bild, titel, erste):
+        ablauf.append("schreiben")
+        assert erste == (len(ablauf) == 2)
+        return anhaengen(ziel, bild, titel, erste)
+
+    monkeypatch.setattr(ausgabe, "seite_zeichnen", gezeichnet)
+    monkeypatch.setattr(ausgabe, "_seite_anhaengen", geschrieben)
+    if sammel:
+        pdf = ausgabe.aufgabe_als_pdf(speicher, nr)[0]
+    else:
+        pdf = ausgabe.arbeit_als_pdf(speicher, arbeit_id)
+    seiten = 5 if sammel else 3
+    assert _seitenzahl(pdf) == seiten
+    # Nie werden zwei Seiten gezeichnet, ohne dass die erste geschrieben ist.
+    assert ablauf == ["zeichnen", "schreiben"] * seiten
+    # Beim Zeichnen einer Seite ist keine frühere mehr im Arbeitsspeicher, am Ende keine.
+    assert lebend == [0] * seiten and noch_da() == 0
+
+
+def test_hoechstens_ein_sammel_pdf_zur_selben_zeit(speicher, monkeypatch):
+    nr = _aufgabe(speicher)
+    _arbeit(speicher, nr, seitenzahl=2)
+    echt = ausgabe.seitenbilder
+    gleichzeitig, hoechstens, ergebnisse = [0], [0], []
+    zaehler = threading.Lock()
+
+    def langsam(*args, **kwargs):
+        with zaehler:
+            gleichzeitig[0] += 1
+            hoechstens[0] = max(hoechstens[0], gleichzeitig[0])
+        try:
+            time.sleep(0.05)
+            yield from echt(*args, **kwargs)
+        finally:
+            with zaehler:
+                gleichzeitig[0] -= 1
+
+    monkeypatch.setattr(ausgabe, "seitenbilder", langsam)
+    faeden = [threading.Thread(target=lambda: ergebnisse.append(ausgabe.aufgabe_als_pdf(speicher,
+                                                                                        nr)))
+              for _ in range(3)]
+    for faden in faeden:
+        faden.start()
+    for faden in faeden:
+        faden.join(timeout=30)
+    # Die zweite und dritte Anfrage haben gewartet; alle bekommen ihr vollständiges PDF.
+    assert hoechstens[0] == 1
+    assert [(_seitenzahl(pdf), enthalten) for pdf, enthalten, _ in ergebnisse] == [(2, 1)] * 3
+
+
+def test_sperre_ist_nach_einem_fehler_wieder_frei(speicher):
+    nr = _aufgabe(speicher)
+    with pytest.raises(RegelFehler):
+        ausgabe.aufgabe_als_pdf(speicher, nr)
+    _, (seite_id,) = _arbeit(speicher, nr)
+    pfad = speicher.bildpfad(speicher.seite(seite_id)["bilddatei"])
+    inhalt = pfad.read_bytes()
+    pfad.write_bytes(b"kein Bild")
+    with pytest.raises(ausgabe.AusgabeFehler):
+        ausgabe.aufgabe_als_pdf(speicher, nr)
+    pfad.write_bytes(inhalt)
+    assert _seitenzahl(ausgabe.aufgabe_als_pdf(speicher, nr)[0]) == 1
+
+
+def test_grosses_jpeg_wird_schon_beim_laden_verkleinert(speicher, monkeypatch):
+    # Bei 6000 × 8000 genügt das Entpacken in halber Größe; das Ergebnis bleibt gleich groß.
+    nr = _aufgabe(speicher)
+    arbeit_id, _ = _arbeit(speicher, nr, _z("Z", x=1500, y=3000, breite=1500, hoehe=300),
+                           groesse=(6000, 8000))
+    gezeichnet = []
+    echt = ausgabe.seite_zeichnen
+    monkeypatch.setattr(ausgabe, "seite_zeichnen",
+                        lambda bild, *a, **k: gezeichnet.append(bild.size) or echt(bild, *a, **k))
+    entwurf, draft = [], JpegImagePlugin.JpegImageFile.draft
+    monkeypatch.setattr(JpegImagePlugin.JpegImageFile, "draft",
+                        lambda self, *a, **k: entwurf.append(a) or draft(self, *a, **k))
+    ((breite, hoehe),) = _bildmasse(ausgabe.arbeit_als_pdf(speicher, arbeit_id))
+    assert 2390 <= max(breite, hoehe) <= 2400
+    (foto_b, foto_h), = gezeichnet
+    assert abs(foto_h / foto_b - 8000 / 6000) < 0.01
+    # Verlangt wird nie weniger als die Zielgröße.
+    assert entwurf and entwurf[0][1] == (foto_b, foto_h)
 
 
 def test_fehleruebersicht_zaehlt_bestaetigte_zeichen_aller_seiten():

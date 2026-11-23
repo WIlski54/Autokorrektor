@@ -5,6 +5,7 @@ import pytest
 from werkzeug.http import parse_options_header
 
 from webapp import routen, uebersicht
+from tests.webapp.test_ausgabe import _seitenzahl
 # Die Testhilfen und Vorrichtungen der Etappe 1 gelten unverändert.
 from tests.webapp.test_routen import (  # noqa: F401
     _aufgabe, _bild, _daten, _mit_zeichen, _text, _zeichen, app, client, schein, schlange,
@@ -34,10 +35,6 @@ def _dateiname(antwort):
     art, angaben = parse_options_header(antwort.headers["Content-Disposition"])
     assert art == "attachment"
     return angaben["filename"]
-
-
-def _seitenzahl(pdf):
-    return len(re.findall(rb"/Type\s*/Page\b(?!s)", pdf))
 
 
 def _ist_fehlerseite(antwort, code):
