@@ -37,7 +37,7 @@ Testseiten. Es werden keine Schülerarbeiten verwendet.
 
 Fotos, Ergebnisse, Klicks und Bericht bleiben lokal und werden nicht ins Repository aufgenommen.
 
-## Web-App starten (Prototyp, Etappe 1 und 2)
+## Web-App starten (Prototyp)
 
 Die Web-App läuft lokal auf dem eigenen Rechner, ohne Login.
 
@@ -50,10 +50,16 @@ Die Web-App läuft lokal auf dem eigenen Rechner, ohne Login.
    offenen Vorschläge gesammelt.
 5. „Korrektur gesamt bestätigen“ schließt eine Arbeit ab. Das geht erst, wenn kein Vorschlag mehr
    offen ist, und jede spätere Änderung hebt die Bestätigung wieder auf.
+6. Ausgabe: „PDF ausgeben“ in der Korrekturansicht erzeugt das PDF einer bestätigten Arbeit mit
+   Unterstreichungen, Randspalte und Fehlerübersicht. In der Stapelansicht gibt es das Sammel-PDF
+   aller bestätigten Arbeiten und die Stapelübersicht mit Fehlerarten, häufigen Fehlerwörtern und
+   einer Tabelle zum Speichern als CSV.
 
-Noch nicht enthalten: die Ausgabe als PDF und die Stapelübersicht (Etappe 3). Datenbank und Fotos
-liegen im Ordner `daten/` und werden nicht ins Repository aufgenommen. Die App lässt sich nur einmal
-gleichzeitig starten.
+Beim Drucken „an Seite anpassen“ wählen, weil Fotos kein A4-Format haben. Ob die richtige
+Schreibung neben dem Kürzel steht, legt die Einstellung der Aufgabe fest.
+
+Datenbank und Fotos liegen im Ordner `daten/` und werden nicht ins Repository aufgenommen. Die App
+lässt sich nur einmal gleichzeitig starten. Sie gibt keine Noten und keine Rangfolge aus.
 
 Der Prototyp ist für eigene Texte gedacht. Vor echten Schülerarbeiten sind Verarbeitungsort,
 Auftragsverarbeitung und Genehmigung zu klären.
