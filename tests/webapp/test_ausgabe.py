@@ -724,3 +724,228 @@ def test_fehleruebersicht_zaehlt_bestaetigte_zeichen_aller_seiten():
         {"kuerzel": "W", "bezeichnung": "Wortwahl", "anzahl": 1},
         {"kuerzel": "weg", "bezeichnung": "", "anzahl": 1}]   # entferntes Kürzel: ohne Namen
     assert ausgabe.fehleruebersicht([{"zeichen": []}], eigene) == []
+
+
+# --- Schräge Zeilen und hohe Rahmen ---------------------------------------------------------
+
+def _schraege_seite(neigung, zeilen=5, abstand=91, hoehe=50, versetzt=True):
+    """Je Textzeile drei Zeichen auf 1500 Pixeln Breite; die Zeile steigt nach rechts ab."""
+    seite = []
+    for nr in range(zeilen):
+        xs = (60 + 37 * nr, 560 + 23 * nr, 1080 - 31 * nr) if versetzt else (100, 600, 1100)
+        seite.append([_z(x=x, y=round(200 + nr * abstand + neigung * (x + 110)), breite=220,
+                         hoehe=hoehe, gelesen=f"{nr}/{x}") for x in xs])
+    return seite
+
+
+@pytest.mark.parametrize("versetzt", [True, False])
+@pytest.mark.parametrize("neigung", [0.0, 0.03, 0.07, 0.10, -0.07])
+def test_randzeilen_folgt_geneigten_zeilen(neigung, versetzt):
+    seite = _schraege_seite(neigung, versetzt=versetzt)
+    durcheinander = [z for zeile in reversed(seite) for z in (zeile[1], zeile[2], zeile[0])]
+    # Je Textzeile genau eine Gruppe, in Lesereihenfolge.
+    assert ausgabe.randzeilen(durcheinander) == seite
+
+
+def test_randspalte_steht_bei_geneigten_zeilen_auf_hoehe_des_zeilenendes():
+    seite = _schraege_seite(0.07)
+    zeichen = [z for zeile in seite for z in zeile]
+    bloecke = ausgabe._randbloecke(zeichen, 1500, 2000, ausgabe.randbreite(1500), False)
+    assert len(bloecke) == 5
+    for nr, (oben, block_h, zeilenmitte, eintraege) in enumerate(bloecke):
+        # Die Mitte der Textzeile am rechten Rand des Fotos (x = 1500).
+        assert abs(zeilenmitte - (200 + nr * 91 + 25 + 0.07 * 1500)) <= 4
+        assert abs(oben + block_h / 2 - zeilenmitte) <= 1 and len(eintraege) == 3
+
+
+def test_randzeilen_vereint_im_zweifel_keine_benachbarten_zeilen():
+    # Zwei Zeichen, eine Zeile tiefer und weit auseinander: dieselbe schräge Zeile oder zwei
+    # gerade? Ohne weitere Zeichen bleibt es bei zwei Zeilen.
+    oben, unten = _z(x=100, y=200, hoehe=50), _z(x=1100, y=291, hoehe=50)
+    assert ausgabe.randzeilen([unten, oben]) == [[oben], [unten]]
+    dritte = _z(x=600, y=400, hoehe=50)
+    assert ausgabe.randzeilen([unten, dritte, oben]) == [[oben], [unten], [dritte]]
+
+
+def test_rahmen_ueber_zwei_zeilen_verkettet_die_zeilen_nicht():
+    erste = [_z(x=100, y=200, hoehe=50), _z("Z", x=900, y=204, hoehe=50)]
+    zweite = [_z(x=120, y=291, hoehe=50), _z("Gr", x=880, y=295, hoehe=50)]
+    hoch = _z("A", x=500, y=200, breite=200, hoehe=141)    # reicht über beide Zeilen
+    zeilen = ausgabe.randzeilen(zweite + [hoch] + erste)
+    assert len(zeilen) == 2
+    # Der hohe Rahmen steht in genau einer der beiden Zeilen, an seiner Stelle von links.
+    assert zeilen == [[erste[0], hoch, erste[1]], zweite]
+    # Überdeckt er eine Zeile stärker, gehört er zu dieser.
+    tiefer = _z("A", x=500, y=230, breite=200, hoehe=120)
+    assert ausgabe.randzeilen(erste + zweite + [tiefer]) == [erste,
+                                                              [zweite[0], tiefer, zweite[1]]]
+
+
+def test_hoher_rahmen_allein_bildet_eine_eigene_zeile():
+    zeile = [_z(x=100, y=200, hoehe=50), _z(x=600, y=200, hoehe=50), _z(x=900, y=202, hoehe=50)]
+    hoch = _z("A", x=300, y=500, hoehe=140)
+    assert ausgabe.randzeilen([hoch] + zeile) == [zeile, [hoch]]
+
+
+# --- Randspalte bei dichten Zeilen ----------------------------------------------------------
+
+def _dichte_seite(zeilen=10, abstand=72, je=3, hoehe=44, oben=300, **felder):
+    return [_z(("R", "Z", "Gr")[i % 3], x=150 + 420 * i, y=oben + nr * abstand, breite=260,
+               hoehe=hoehe, **felder) for nr in range(zeilen) for i in range(je)]
+
+
+def _bloecke(zeichen, vorschlag, breite=1500, hoehe=2000):
+    return ausgabe._randbloecke(zeichen, breite, hoehe, ausgabe.randbreite(breite, vorschlag),
+                                vorschlag)
+
+
+def _ueberdeckungsfrei(bloecke):
+    return all(oben + block_h <= naechster[0]
+               for (oben, block_h, *_), naechster in zip(bloecke, bloecke[1:]))
+
+
+@pytest.mark.parametrize("vorschlag", [True, False])
+def test_dichte_zeilen_behalten_die_hoehe_der_textzeile(vorschlag):
+    zeichen = _dichte_seite()
+    bloecke = _bloecke(zeichen, vorschlag)
+    assert len(bloecke) == 10
+    versatz = [abs(oben + block_h / 2 - zeilenmitte) for oben, block_h, zeilenmitte, _ in bloecke]
+    assert max(versatz) < 72          # weniger als ein Zeilenabstand
+    assert _ueberdeckungsfrei(bloecke)
+    # Die Blöcke stehen in der Reihenfolge der Textzeilen, jeder mit seinen drei Kürzeln.
+    assert [zeilenmitte for _, _, zeilenmitte, _ in bloecke] == [300 + 22 + nr * 72
+                                                                 for nr in range(10)]
+    assert [oben for oben, *_ in bloecke] == sorted(oben for oben, *_ in bloecke)
+    assert all([e[2] for e in eintraege] == ["R", "Z", "Gr"] for *_, eintraege in bloecke)
+    # Die Seite wächst nicht.
+    aus = ausgabe.seite_zeichnen(_bild((1500, 2000)), zeichen, vorschlag_zeigen=vorschlag)
+    assert aus.size == (1500 + ausgabe.randbreite(1500, vorschlag), 2000)
+
+
+def test_vorschlaege_werden_bei_dichten_zeilen_gekuerzt_statt_umbrochen():
+    lang = "Fahrradständer"
+    frei = _bloecke(_dichte_seite(zeilen=1, vorschlag=lang), True)
+    dicht = _bloecke(_dichte_seite(vorschlag=lang), True)
+    # Eine einzelne Zeile hat Platz: Der Block bricht um und zeigt die Vorschläge ganz.
+    (_, hoch, _, eintraege), = frei
+    assert [e[4] for e in eintraege] == [lang] * 3 and len({e[1] for e in eintraege}) > 1
+    # Zwischen dichten Zeilen steht alles in einer Zeile; die Vorschläge sind gekürzt.
+    for _, block_h, _, eintraege in dicht:
+        assert block_h < hoch and {e[1] for e in eintraege} == {0}
+        assert [e[2] for e in eintraege] == ["R", "Z", "Gr"]
+        assert all(e[4].endswith("…") and lang.startswith(e[4][:-1]) for e in eintraege)
+
+
+def test_vorschlaege_entfallen_wenn_auch_gekuerzt_kein_platz_ist():
+    # Sechs Zeichen je Zeile: Mit Vorschlägen passt nichts mehr in eine Zeile der Spalte.
+    zeichen = [_z("R", x=40 + 240 * i, y=300 + nr * 72, breite=200, hoehe=44)
+               for nr in range(6) for i in range(6)]
+    bloecke = _bloecke(zeichen, True)
+    for _, _, _, eintraege in bloecke:
+        assert [e[2] for e in eintraege] == ["R"] * 6      # die Kürzel bleiben immer
+        assert all(e[4] == "" for e in eintraege)
+    assert _ueberdeckungsfrei(bloecke)
+    # Eine einzelne solche Zeile behält ihre Vorschläge.
+    assert all(e[4] for e in _bloecke(zeichen[:6], True)[0][3])
+
+
+def test_umbrochener_block_liegt_mittig_auf_der_textzeile():
+    zeichen = [_z("Gr", x=10 + 45 * i, y=190, breite=40, hoehe=20) for i in range(12)]
+    (oben, block_h, zeilenmitte, _), = _bloecke(zeichen, False, B, H)
+    assert zeilenmitte == 200 and block_h > 40
+    assert abs(oben + block_h / 2 - 200) <= 1
+
+
+def test_draengende_bloecke_ruecken_nach_oben_und_unten():
+    # Drei Zeilen so dicht, dass ihre Blöcke sich überdecken würden: Die mittlere bleibt,
+    # die äußeren weichen gleich weit aus.
+    zeichen = [_z(x=100, y=180 + 8 * nr, hoehe=6) for nr in range(3)]
+    oben, mitte, unten = _bloecke(zeichen, False, B, H)
+    assert _ueberdeckungsfrei([oben, mitte, unten])
+    assert abs(mitte[0] + mitte[1] / 2 - mitte[2]) <= 1
+    assert oben[0] + oben[1] / 2 < oben[2] and unten[0] + unten[1] / 2 > unten[2]
+    assert abs((oben[2] - oben[0]) - (unten[0] - unten[2]) - oben[1]) <= 2
+
+
+def test_bloecke_bleiben_am_oberen_und_unteren_rand_im_foto():
+    oben = _bloecke([_z(x=100, y=2 + 8 * nr, hoehe=10) for nr in range(4)], False, B, H)
+    unten = _bloecke([_z(x=100, y=H - 12 - 8 * nr, hoehe=10) for nr in range(4)], False, B, H)
+    assert oben[0][0] == 0 and _ueberdeckungsfrei(oben)
+    assert unten[-1][0] + unten[-1][1] == H and _ueberdeckungsfrei(unten)
+
+
+def test_weit_abgerueckter_block_bekommt_eine_fuehrungslinie():
+    rand = ausgabe.randbreite(B)
+    einzeln = ausgabe._randspalte_setzen([_z(x=100, y=100)], B, H, rand, False)
+    assert einzeln[2] == []                      # der Block steht auf seiner Zeile
+    zeichen = [_z("R", x=100, y=100 + 8 * nr, hoehe=6) for nr in range(9)]
+    gesetzt, _, fuehrungen, benoetigt = ausgabe._randspalte_setzen(zeichen, B, H, rand, False)
+    bloecke = _bloecke(zeichen, False, B, H)
+    weit = [block for block in bloecke if abs(block[0] + block[1] / 2 - block[2]) > block[1] / 2]
+    assert benoetigt == H and 0 < len(weit) < 9 and len(fuehrungen) == len(weit)
+    for (x1, y1, x2, y2), (oben, block_h, zeilenmitte, eintraege) in zip(fuehrungen, weit):
+        # Von der Höhe der Textzeile an der Trennlinie zur Mitte des Blocks, links der Kürzel.
+        assert y1 == round(zeilenmitte) and abs(y2 - (oben + block_h / 2)) <= 1
+        assert 0 < x1 < x2 < min(e[0] for e in gesetzt)
+    # Für die Linien rücken die Kürzel um einen Streifen nach rechts.
+    assert min(e[0] for e in gesetzt) > min(e[0] for e in einzeln[0])
+    # Gezeichnet ist die Linie dünn und grau, die Kürzel bleiben farbig.
+    aus = ausgabe.seite_zeichnen(_bild(), zeichen)
+    x1, y1, _, _ = fuehrungen[0]
+    punkt = aus.getpixel((B + x1, y1))
+    assert punkt != WEISS and not _bunt(punkt)
+    ohne = ausgabe.seite_zeichnen(_bild(), zeichen[:1])
+    assert ohne.getpixel((B + x1, y1)) == WEISS
+
+
+# --- Unterstreichung über einem anderen Rahmen ----------------------------------------------
+
+def _strichzeilen(aus, z):
+    """Die Bildzeilen, in denen die Unterstreichung des Zeichens liegt."""
+    f = ausgabe.farbe(z["kategorie"])
+    return [y for y in range(z["y"], z["y"] + z["hoehe"] + 20)
+            if all(aus.getpixel((x, y)) == f for x in range(z["x"], z["x"] + z["breite"]))]
+
+
+def test_unterstreichung_bleibt_ueber_dem_rahmen_der_naechsten_zeile():
+    oben = _z("R", x=100, y=100, breite=120, hoehe=40)        # Unterkante 140
+    strich = ausgabe.strichstaerke(B)
+    frei = _strichzeilen(ausgabe.seite_zeichnen(_bild(), [oben]), oben)
+    assert frei == list(range(140 + strich, 140 + 2 * strich))
+    # Unmittelbar darunter beginnt der Rahmen der nächsten Textzeile: Der Strich weicht aus.
+    unten = _z("Z", x=150, y=141, breite=120, hoehe=40)
+    aus = ausgabe.seite_zeichnen(_bild(), [oben, unten])
+    zeilen = _strichzeilen(aus, oben)
+    assert len(zeilen) == strich and max(zeilen) < 141 and min(zeilen) >= 140 - strich
+    # Der Strich des unteren Zeichens bleibt, wo er ist.
+    assert _strichzeilen(aus, unten) == list(range(181 + strich, 181 + 2 * strich))
+
+
+def test_unterstreichung_steigt_hoechstens_bis_zur_eigenen_unterkante():
+    # Der Rahmen schließt Unterlängen ein und reicht in die nächste Zeile hinein.
+    oben = _z("R", x=100, y=100, breite=120, hoehe=40)
+    unten = _z("Z", x=100, y=128, breite=120, hoehe=40)
+    strich = ausgabe.strichstaerke(B)
+    zeilen = _strichzeilen(ausgabe.seite_zeichnen(_bild(), [oben, unten]), oben)
+    assert zeilen == list(range(140 - strich, 140))
+
+
+@pytest.mark.parametrize("anderes", [
+    {"x": 300, "y": 141},                      # daneben, nicht darunter
+    {"x": 100, "y": 150},                      # darunter, aber mit Abstand
+    {"x": 100, "y": 96},                       # derselbe Ort (etwa ein verworfenes Zeichen)
+])
+def test_unterstreichung_bleibt_ohne_rahmen_unmittelbar_darunter(anderes):
+    oben = _z("R", x=100, y=100, breite=120, hoehe=40)
+    strich = ausgabe.strichstaerke(B)
+    stoerer = _z("Z", breite=120, hoehe=40, status="verworfen", **anderes)
+    zeilen = _strichzeilen(ausgabe.seite_zeichnen(_bild(), [oben, stoerer]), oben)
+    assert zeilen == list(range(140 + strich, 140 + 2 * strich))
+
+
+def test_auch_ein_nicht_bestaetigter_rahmen_darunter_haelt_den_strich_fern():
+    oben = _z("R", x=100, y=100, breite=120, hoehe=40)
+    unten = _z("Z", x=100, y=141, breite=120, hoehe=40, status="offen")
+    aus = ausgabe.seite_zeichnen(_bild(), [oben, unten])
+    assert max(_strichzeilen(aus, oben)) < 141
+    assert not [p for p in _bunte(aus) if aus.getpixel(p) == ausgabe.farbe("Z")]
