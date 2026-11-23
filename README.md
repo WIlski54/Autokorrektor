@@ -48,6 +48,9 @@ Die Web-App läuft lokal auf dem eigenen Rechner, ohne Login.
 4. Arbeit öffnen und die Vorschläge prüfen: bestätigen, verwerfen, ändern, verschieben, eigene
    Zeichen setzen. Die Tastenbelegung steht unter dem Foto. „Rest bestätigen“ übernimmt alle noch
    offenen Vorschläge gesammelt.
+   Der Umschalter „Bearbeiten | Vorschau“ über dem Foto (Taste `P`) zeigt die Seite so, wie sie
+   ausgegeben wird: Fehler unterstrichen, Kürzel am Rand. Die Vorschau gibt es schon vor der
+   Gesamtbestätigung; sie zeigt nur bestätigte Zeichen.
 5. „Korrektur gesamt bestätigen“ schließt eine Arbeit ab. Das geht erst, wenn kein Vorschlag mehr
    offen ist, und jede spätere Änderung hebt die Bestätigung wieder auf.
 6. Ausgabe: „PDF ausgeben“ in der Korrekturansicht erzeugt das PDF einer bestätigten Arbeit mit
