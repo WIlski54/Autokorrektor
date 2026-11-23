@@ -371,6 +371,26 @@ def test_korrekturansicht_hat_pdf_knopf_nur_aktiv_bei_bestaetigter_arbeit(client
     assert _daten(text, "arbeit-daten")["arbeit"]["bestaetigt_am"] is not None
 
 
+def test_korrekturansicht_hat_den_umschalter_zur_vorschau(client, speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id = _arbeit(speicher, nr, _zeichen(**FEST), seitenzahl=2, bestaetigen=False)
+    erste, zweite = _seiten(speicher, arbeit_id)
+    text = _text(client.get(f"/arbeit/{arbeit_id}?seite=2"))
+    # Zwei zusammengehörige Knöpfe; ohne Skript gilt die Bearbeitung.
+    gruppe = re.search(r'<div class="ansichtswahl" role="group"[^>]*>(.*?)</div>', text, re.S)
+    assert gruppe
+    knoepfe = re.findall(r'<button\b[^>]*\bid="(ansicht-\w+)"[^>]*\baria-pressed="(\w+)"[^>]*>'
+                         r'([^<]*)</button>', gruppe.group(1))
+    assert knoepfe == [("ansicht-bearbeiten", "true", "Bearbeiten"),
+                       ("ansicht-vorschau", "false", "Vorschau")]
+    # Hinweiszeile, Ladehinweis und Vorschaubild warten verborgen; die Adresse gilt dieser Seite.
+    for kennung in ("vorschau-hinweis", "vorschau-laedt", "vorschaubild"):
+        assert re.search(r'<\w+\b[^>]*\bid="' + kennung + r'"[^>]*\bhidden\b', text), kennung
+    assert not re.search(r'<img\b[^>]*\bid="vorschaubild"[^>]*\bsrc=', text)
+    assert _daten(text, "arbeit-daten")["url_vorschau"] == f"/seite/{zweite}/vorschau"
+    assert re.search(r"<kbd>P</kbd>\s*Vorschau", text)
+
+
 # --- Knöpfe in der Stapelansicht ------------------------------------------------------------
 
 def test_stapel_zeigt_sammel_pdf_uebersicht_und_pdf_je_bestaetigter_arbeit(client, speicher):

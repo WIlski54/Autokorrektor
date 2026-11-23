@@ -63,17 +63,26 @@
 <div class="ansicht">
   <section class="bildspalte" aria-label="Foto der Seite">
     <div class="werkzeuge">
+      {# Bearbeiten zeigt die Rahmen über dem Foto, Vorschau die Seite wie im PDF. #}
+      <div class="ansichtswahl" role="group" aria-label="Darstellung der Seite">
+        <button class="knopf klein umschalter" type="button" id="ansicht-bearbeiten" aria-pressed="true">Bearbeiten</button>
+        <button class="knopf klein umschalter" type="button" id="ansicht-vorschau" aria-pressed="false" title="Vorschau der Ausgabe (Taste P)">Vorschau</button>
+      </div>
       <button class="knopf klein" type="button" id="zoom-kleiner" aria-label="Verkleinern">−</button>
       <button class="knopf klein" type="button" id="zoom-einpassen">Einpassen</button>
       <button class="knopf klein" type="button" id="zoom-groesser" aria-label="Vergrößern">+</button>
       <span class="leise" id="zoom-anzeige" aria-live="polite">100 %</span>
+      <span class="leise vorschau-laedt" id="vorschau-laedt" role="status" hidden>Vorschau wird geladen …</span>
     </div>
+    <p class="vorschau-hinweis" id="vorschau-hinweis" role="status" hidden></p>
     <div class="rollfeld" id="rollfeld">
       <div class="buehne" id="buehne">
         <img id="foto" src="{{ url_for('seiten.bild_seite', seite_id=seite.id) }}"
              width="{{ seite.breite }}" height="{{ seite.hoehe }}" draggable="false"
              alt="Foto der Seite {{ nummer }} der Arbeit">
         <div id="rahmenebene" class="rahmenebene"></div>
+        <img id="vorschaubild" class="vorschaubild" draggable="false" hidden
+             alt="Vorschau der Ausgabe: Seite {{ nummer }} der Arbeit mit Unterstreichungen und Randzeichen">
       </div>
     </div>
     <p class="tasten" aria-label="Tastenbelegung">
@@ -83,6 +92,7 @@
       <span><kbd>Z</kbd> zurückholen</span>
       <span><kbd>E</kbd> ändern</span>
       <span><kbd>S</kbd> Zeichen setzen</span>
+      <span><kbd>P</kbd> Vorschau der Ausgabe</span>
       <span><kbd>←</kbd> <kbd>→</kbd> Seite</span>
       <span><kbd>Bild↑</kbd> <kbd>Bild↓</kbd> Arbeit</span>
       <span><kbd>Esc</kbd> abbrechen</span>

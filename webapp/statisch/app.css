@@ -343,6 +343,23 @@ body.korrektur .titelzeile { align-items: center; margin-bottom: .75rem; }
 .buehne { position: relative; width: 100%; }
 .buehne img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
 .rahmenebene { position: absolute; inset: 0; }
+.buehne img[hidden], .rahmenebene[hidden] { display: none; }
+
+/* Umschalter Bearbeiten/Vorschau: zwei Knöpfe als ein Stück; die Vorschau zeigt die Seite wie im PDF. */
+.ansichtswahl { display: inline-flex; margin-right: .6rem; }
+.ansichtswahl .knopf { border-radius: 0; font-weight: 600; }
+.ansichtswahl .knopf:first-child { border-radius: var(--rund) 0 0 var(--rund); }
+.ansichtswahl .knopf:last-child { border-radius: 0 var(--rund) var(--rund) 0; margin-left: -1px; }
+.ansichtswahl .knopf[aria-pressed="true"] { position: relative; }
+.vorschau-laedt[hidden] { display: none; }
+.vorschau-hinweis {
+  margin: 0 0 .6rem; padding: .45rem .8rem;
+  border: 1px solid var(--warnung-linie); border-left-width: 4px; border-radius: var(--rund);
+  background: var(--warnung-hell); font-size: .95rem;
+}
+.vorschau-hinweis.bestaetigt { border-color: #bcd9c2; border-left-color: var(--erfolg); background: var(--erfolg-hell); }
+.vorschau-hinweis[hidden] { display: none; }
+.rollfeld.laedt { opacity: .6; }
 
 .tasten { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: .6rem 0 0;
   color: var(--leise); font-size: .82rem; }

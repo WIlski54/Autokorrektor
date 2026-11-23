@@ -1,6 +1,7 @@
 // Korrekturansicht: Rahmen der Zeichen über dem Foto, Liste daneben. Entscheiden, Ändern,
 // Verschieben und eigene Zeichen per Maus, Stift, Finger und Tastatur; dazu „Rest bestätigen“,
 // die Gesamtbestätigung der Arbeit, die Neuanalyse der Seite und das Kürzel der Arbeit.
+// Der Umschalter „Vorschau“ zeigt statt der Rahmen die Seite so, wie sie im PDF erschiene.
 // Jede Änderung wird sofort gespeichert; schlägt das Speichern fehl, kehrt die
 // Anzeige zum vorherigen Zustand zurück.
 // Der Stand der Arbeit (offene Vorschläge, Bestätigung, Zustand aller Seiten) kommt immer vom
@@ -40,6 +41,7 @@
   var zug = null;          // laufendes Verschieben oder Größe-Ändern eines Rahmens
   var formularFuer = null; // id des Zeichens, dessen Formular „Ändern“ offen ist
   var setzen = false;      // Modus „Zeichen setzen“
+  var vorschau = false;    // statt Foto und Rahmen ist die Vorschau der Ausgabe zu sehen
   var aufzug = null;       // laufendes Aufziehen eines neuen Rahmens
   var entwurf = null;      // {lage, element} des aufgezogenen, noch nicht gespeicherten Rahmens
   var letztesKuerzel = null;
@@ -344,7 +346,7 @@
 
   // Die Knöpfe eines Listenpunkts als [Aktion, Beschriftung, Klasse].
   function aktionenFuer(z) {
-    if (gesperrt || formularFuer === z.id) { return []; }
+    if (gesperrt || vorschau || formularFuer === z.id) { return []; }
     if (z.herkunft === "hand") {
       return [["aendern", "Ändern"], ["loeschen", "Löschen", "gefahr"]];
     }
@@ -492,7 +494,7 @@
 
   function aendernOeffnen(id) {
     var z = zeichen[id];
-    if (!z || gesperrt || unterwegs[id]) { return; }
+    if (!z || gesperrt || vorschau || unterwegs[id]) { return; }
     if (z.status === "verworfen") {
       melden("Dieser Vorschlag ist verworfen. Zum Ändern bitte erst zurückholen (Taste Z).", "hinweis");
       return;
@@ -637,6 +639,7 @@
       " auf dieser Seite, " + (offen ? offen + " offen" : "keines offen");
     $("verworfen-zahl").textContent = "(" + verworfen + ")";
     $("liste-leer").hidden = liste.children.length > 0;
+    vorschauHinweisZeigen();
   }
 
   function arbeitZeigen() {
@@ -645,6 +648,7 @@
     anzeige.hidden = !arbeit.bestaetigt_am;
     $("bestaetigt-wann").textContent = arbeit.bestaetigt_am ? zeitpunkt(arbeit.bestaetigt_am) : "";
     fussleisteZeigen();
+    vorschauHinweisZeigen();
   }
 
   function seiteUnfertig() {
@@ -693,6 +697,7 @@
     arbeit.grund = stand.grund;
     if (Array.isArray(stand.seiten)) { daten.seiten = stand.seiten; }
     arbeitZeigen();
+    vorschauAbgleichen();
     seiteAbgleichen();
     abfragePlanen();
     return true;
@@ -806,7 +811,7 @@
     });
     if (vorher !== id) { auswahlGewechselt(vorher); }
     if (id === null) { return; }
-    if (rahmen[id] && quelle !== "bild") { inSicht(rollfeld, rahmen[id], true); }
+    if (rahmen[id] && quelle !== "bild" && !vorschau) { inSicht(rollfeld, rahmen[id], true); }
     if (eintraege[id]) {
       if (quelle !== "liste") { inSicht($("listenspalte"), eintraege[id], false); }
       if (quelle === "taste") {
@@ -914,7 +919,7 @@
   // `gelungen()` und `gescheitert(Meldung)`; die Auswahl wandert dann erst nach dem Speichern.
   function speichern(id, pfad, vorlaeufig, koerper, entscheidung, formular) {
     var z = zeichen[id];
-    if (!z || unterwegs[id] || gesperrt) { return false; }
+    if (!z || unterwegs[id] || gesperrt || vorschau) { return false; }
     var vorher = kopie(z);
     var ziel = naechsterOffener(id);  // vor der Änderung: danach fehlt ein Verworfenes in der Reihe
     Object.keys(vorlaeufig).forEach(function (feld) { z[feld] = vorlaeufig[feld]; });
@@ -980,7 +985,7 @@
   // Löscht ein eigenes Zeichen; scheitert das Speichern, steht es wieder da.
   function loeschen(id) {
     var z = zeichen[id];
-    if (!z || unterwegs[id] || gesperrt) { return; }
+    if (!z || unterwegs[id] || gesperrt || vorschau) { return; }
     if (z.herkunft !== "hand") {
       melden("Vorschläge der KI werden verworfen, nicht gelöscht (Taste V).", "hinweis");
       return;
@@ -1021,6 +1026,8 @@
     var id = Number(punkt.getAttribute("data-zeichen"));
     var akt = knopf.getAttribute("data-akt");
     if (akt === "waehlen") {
+      // In der Vorschau führt ein Klick auf ein Zeichen zurück zur Bearbeitung, zu diesem Zeichen.
+      if (vorschau) { ansichtStellen(false); }
       waehlen(id, "liste");
     } else if (AKTIONEN[akt]) {
       if (gewaehlt !== id) { waehlen(id, "liste"); }
@@ -1062,7 +1069,7 @@
   }
 
   function setzenStellen(an) {
-    if (an && gesperrt) { return; }
+    if (an && (gesperrt || vorschau)) { return; }
     setzen = an;
     ebene.classList.toggle("setzen", an);
     setzenKnopf.setAttribute("aria-pressed", an ? "true" : "false");
@@ -1163,6 +1170,116 @@
   setzenKnopf.addEventListener("click", function () { setzenStellen(!setzen); });
   setzenKnopf.disabled = gesperrt;
   ebene.classList.toggle("lesend", gesperrt);
+
+  // --- Vorschau der Ausgabe ------------------------------------------------------------------
+  //
+  // „Vorschau“ zeigt statt Foto und Rahmen die Seite so, wie sie im PDF erschiene: nur die
+  // bestätigten Zeichen, unterstrichen und mit Randspalte. Dort ist nichts bearbeitbar. Das
+  // Bild kommt bei jedem Einschalten neu vom Server und wieder, sobald sich der Stand der
+  // Arbeit ändert. Die Wahl gilt über das Blättern hinweg, bis das Fenster geschlossen wird.
+
+  var vorschaubild = $("vorschaubild");
+  var ANSICHT = "korrektor-ansicht";
+  var vorschauLauf = 0;      // zählt die Abrufe des Bildes; nur der jüngste gilt
+  var vorschauStand = null;  // der Stand der Arbeit, zu dem das Bild zuletzt angefordert wurde
+
+  function vorschauHinweisZeigen() {
+    var zeile = $("vorschau-hinweis");
+    zeile.hidden = !vorschau;
+    if (!vorschau) { return; }
+    var bestaetigt = Boolean(arbeit.bestaetigt_am);
+    var text = "Vorschau der Ausgabe.";
+    if (!bestaetigt) {
+      text = "Vorschau – noch nicht bestätigt. So sähe die Ausgabe mit den bisher bestätigten " +
+        "Zeichen aus.";
+      var offen = offeneAufDerSeite();
+      if (offen === 1) {
+        text += " 1 offener Vorschlag auf dieser Seite erscheint noch nicht.";
+      } else if (offen > 1) {
+        text += " " + offen + " offene Vorschläge auf dieser Seite erscheinen noch nicht.";
+      }
+    }
+    zeile.classList.toggle("bestaetigt", bestaetigt);
+    if (zeile.textContent !== text) { zeile.textContent = text; }  // nur Neues wird vorgelesen
+  }
+
+  function vorschauLaedtZeigen(an) {
+    $("vorschau-laedt").hidden = !an;
+    rollfeld.classList.toggle("laedt", an);
+  }
+
+  // Holt das Bild zum aktuellen Stand. Bis es da ist, bleibt stehen, was zu sehen war (das Foto
+  // ohne Rahmen oder die bisherige Vorschau). Die Adresse trägt den Stand der Arbeit und die
+  // Nummer des Abrufs: So erscheint nie ein Bild aus einem Zwischenspeicher.
+  function vorschauLaden() {
+    var lauf = ++vorschauLauf;
+    vorschauStand = arbeit.stand;
+    vorschauLaedtZeigen(true);
+    vorschaubild.onload = function () {
+      if (lauf !== vorschauLauf || !vorschau) { return; }
+      vorschauLaedtZeigen(false);
+      vorschaubild.hidden = false;
+      foto.hidden = true;
+      vorschauAbgleichen();
+    };
+    vorschaubild.onerror = function () {
+      if (lauf !== vorschauLauf || !vorschau) { return; }
+      ansichtStellen(false);
+      melden("Die Vorschau ließ sich nicht laden. Die Ansicht zeigt wieder die Bearbeitung. " +
+        "Läuft die App noch, und gibt es das Foto dieser Seite noch?");
+    };
+    vorschaubild.src = daten.url_vorschau + "?stand=" + encodeURIComponent(arbeit.stand) +
+      "&abruf=" + lauf;
+  }
+
+  // Hat sich der Stand der Arbeit geändert (etwa durch die Gesamtbestätigung), kommt ein neues Bild.
+  function vorschauAbgleichen() {
+    if (vorschau && arbeit.stand !== vorschauStand) { vorschauLaden(); }
+  }
+
+  function ansichtMerken() {
+    try {
+      if (vorschau) {
+        window.sessionStorage.setItem(ANSICHT, "vorschau");
+      } else {
+        window.sessionStorage.removeItem(ANSICHT);
+      }
+    } catch (fehler) { /* ohne Speicher beginnt die nächste Seite in der Bearbeitung */ }
+  }
+
+  // Wechselt zwischen Bearbeitung (false) und Vorschau (true).
+  function ansichtStellen(an) {
+    if (an === vorschau) { return; }
+    if (an) {
+      // Was gerade bearbeitet wird, endet ohne Wirkung.
+      zugAbbrechen();
+      setzenStellen(false);
+      aendernSchliessen(false);
+    }
+    vorschau = an;
+    ansichtMerken();
+    $("ansicht-bearbeiten").setAttribute("aria-pressed", an ? "false" : "true");
+    $("ansicht-vorschau").setAttribute("aria-pressed", an ? "true" : "false");
+    if (!an) {
+      vorschauLauf++;  // ein Abruf, der noch läuft, gilt nicht mehr
+      vorschaubild.onload = vorschaubild.onerror = null;
+      vorschaubild.removeAttribute("src");
+      vorschaubild.hidden = true;
+      foto.hidden = false;
+      vorschauLaedtZeigen(false);
+    }
+    ebene.hidden = an;
+    setzenKnopf.disabled = gesperrt || an;
+    allesZeichnen();  // die Liste zeigt in der Vorschau keine Knöpfe
+    if (an) {
+      vorschauLaden();
+    } else if (gewaehlt !== null && rahmen[gewaehlt]) {
+      inSicht(rollfeld, rahmen[gewaehlt], true);
+    }
+  }
+
+  $("ansicht-bearbeiten").addEventListener("click", function () { ansichtStellen(false); });
+  $("ansicht-vorschau").addEventListener("click", function () { ansichtStellen(true); });
 
   // --- Rückfragen, Rest bestätigen, Gesamtbestätigung, Neuanalyse -----------------------------
 
@@ -1331,6 +1448,7 @@
         function (stelle) { stelle.textContent = arbeit.kuerzel; });
       document.title = document.title.replace("Arbeit " + alt, "Arbeit " + arbeit.kuerzel);
       kuerzelFormularStellen(false);
+      if (vorschau) { vorschauLaden(); }  // der Kopf der Seite nennt das Kürzel
     }, function (fehler) {
       melden(fehlertext(fehler));
       $("kuerzel-feld").focus();
@@ -1360,11 +1478,13 @@
     return Boolean(ziel && ziel.href);
   }
 
-  // Esc räumt von innen nach außen auf: Modus „Zeichen setzen“, Formular, Meldung, Auswahl.
+  // Esc räumt von innen nach außen auf: Modus „Zeichen setzen“, Formular, Meldung, Vorschau,
+  // Auswahl.
   function abbrechen() {
     if (setzen) { setzenStellen(false); return; }
     if (formularFuer !== null) { aendernSchliessen(true); return; }
     if (!meldung.hidden) { meldungSchliessen(); return; }
+    if (vorschau) { ansichtStellen(false); return; }
     waehlen(null);
   }
 
@@ -1374,6 +1494,8 @@
       aendernOeffnen(gewaehlt);
     } else if (taste === "s") {
       setzenStellen(!setzen);
+    } else if (taste === "p") {
+      ansichtStellen(!vorschau);
     } else {
       return false;
     }
@@ -1404,9 +1526,14 @@
       }
       return;
     }
+    // In der Vorschau ist nichts bearbeitbar: Es wirken nur P, Esc und das Blättern.
+    if (vorschau && ["p", "Escape", "ArrowLeft", "ArrowRight", "PageUp", "PageDown"]
+        .indexOf(taste) < 0) {
+      return;
+    }
     // Eine gehaltene Taste entscheidet nicht Zeichen um Zeichen weiter.
     var aktion = taste === "b" || taste === "v" || taste === "Delete" || taste === "z" ||
-      taste === "e" || taste === "s" || (taste === "Enter" && aufZeichen);
+      taste === "e" || taste === "s" || taste === "p" || (taste === "Enter" && aufZeichen);
     if (aktion && ereignis.repeat) {
       ereignis.preventDefault();
       return;
@@ -1457,6 +1584,10 @@
   // es diese Seite, lädt die Ansicht danach neu und zeigt die neuen Vorschläge.
   abfragePlanen();
   notizZeigen();
+  // Wer in der Vorschau geblättert hat, sieht auch diese Seite in der Vorschau.
+  try {
+    if (window.sessionStorage.getItem(ANSICHT) === "vorschau") { ansichtStellen(true); }
+  } catch (fehler) { /* ohne Speicher beginnt die Seite in der Bearbeitung */ }
 
   // Eine Ansicht, die geruht hat (aus dem Verlauf zurückgeholt oder wieder sichtbar geworden),
   // fragt den Stand einmal neu ab: Inzwischen kann in einem anderen Fenster korrigiert worden sein.
