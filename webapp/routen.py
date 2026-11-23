@@ -281,6 +281,7 @@ def arbeit(arbeit_id):
         "seiten": _seiten_stand(arbeit),
         "kuerzel": _kuerzelliste(),
         "url_stand": url_for("seiten.stand", aufgabe_id=aufgabe["id"]),
+        "url_vorschau": url_for("seiten.seite_vorschau", seite_id=seite["id"]),
     }
     return render_template(
         "arbeit.html", aufgabe=aufgabe, arbeit=arbeit, seite=seite, nummer=nummer,
@@ -596,6 +597,7 @@ def seite_neu_analysieren(seite_id):
 #
 # Ausgegeben werden nur Arbeiten, deren Korrektur insgesamt bestätigt ist. Die Antworten
 # sind Downloads und werden nie zwischengespeichert: Sie zeigen den Stand der Korrektur.
+# Die Vorschau einer Seite zeigt dieselbe Zeichnung schon vor der Gesamtbestätigung.
 
 NAMENSTEIL_LAENGE = 60  # Zeichen je Teil eines Dateinamens
 
@@ -667,6 +669,29 @@ def aufgabe_pdf(aufgabe_id):
     if fehlend:
         teile.append(f"{enthalten}-von-{enthalten + fehlend}")
     return _download(pdf, "application/pdf", _dateiname(*teile, endung="pdf"))
+
+
+@seiten.get("/seite/<int:seite_id>/vorschau")
+def seite_vorschau(seite_id):
+    """Die Seite als Bild, wie sie im PDF erschiene: nur mit den bestätigten Zeichen.
+
+    Anders als das PDF braucht die Vorschau keine Gesamtbestätigung. Ein fehlendes oder
+    defektes Foto ergibt 500. Das Bild zeigt den Stand der Korrektur und wird nie
+    zwischengespeichert.
+    """
+    seite = _speicher().seite(seite_id)
+    if seite is None:
+        abort(404)
+    try:
+        bild = ausgabe.seite_als_vorschau(_speicher(), seite_id)
+    except ausgabe.AusgabeFehler as fehler:
+        return _nicht_ausgebbar(fehler, url_for("seiten.arbeit", arbeit_id=seite["arbeit_id"]),
+                                "Zurück zur Korrektur der Arbeit", code=500)
+    if bild is None:  # inzwischen gelöscht
+        abort(404)
+    antwort = Response(bild, mimetype="image/jpeg")
+    antwort.headers["Cache-Control"] = "no-store"
+    return antwort
 
 
 @seiten.get("/aufgabe/<int:aufgabe_id>/uebersicht")

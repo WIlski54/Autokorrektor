@@ -621,6 +621,34 @@ def _skaliert(zeichen, faktor):
             for z in zeichen]
 
 
+def _seitenbild(speicher, aufgabe, arbeit, nummer, eigene, zweck="Das PDF"):
+    """Die Seite `nummer` (ab 1) der Arbeit als Bild der Ausgabe.
+
+    Die Seite trägt den Kopf mit Aufgabentitel, Kürzel der Arbeit und Seitenzahl, die letzte
+    Seite der Arbeit dazu die Fehlerübersicht. Keine Kante ist länger als MAX_KANTE.
+    `AusgabeFehler`, wenn das Foto fehlt oder nicht lesbar ist; `zweck` nennt darin, was
+    nicht erzeugt wurde.
+    """
+    vorschlag_zeigen = bool(aufgabe["vorschlag_in_ausgabe"])
+    seitenzahl = len(arbeit["seiten"])
+    seite = arbeit["seiten"][nummer - 1]
+    uebersicht = fehleruebersicht(arbeit["seiten"], eigene) if nummer == seitenzahl else None
+    try:
+        foto, faktor = _foto_laden(speicher.bildpfad(seite["bilddatei"]), vorschlag_zeigen,
+                                   uebersicht)
+    except FOTO_FEHLER as fehler:
+        raise AusgabeFehler(f"Das Foto zu Seite {nummer} der Arbeit {arbeit['kuerzel']} fehlt "
+                            f"oder ist nicht lesbar. {zweck} wurde nicht erzeugt.") from fehler
+    kopf = f"{aufgabe['titel']} · Arbeit {arbeit['kuerzel']} · Seite {nummer} von {seitenzahl}"
+    bild = seite_zeichnen(foto, _skaliert(seite["zeichen"], faktor), vorschlag_zeigen, kopf,
+                          uebersicht)
+    foto.close()
+    del foto
+    if max(bild.size) > MAX_KANTE:   # etwa eine übervolle Randspalte
+        bild.thumbnail((MAX_KANTE, MAX_KANTE), Image.LANCZOS)
+    return bild
+
+
 def seitenbilder(speicher, aufgabe, arbeit, eigene=None):
     """Erzeugt nacheinander die Seiten einer Arbeit als Bilder für das PDF.
 
@@ -631,25 +659,32 @@ def seitenbilder(speicher, aufgabe, arbeit, eigene=None):
     """
     if eigene is None:
         eigene = speicher.kuerzel()
-    vorschlag_zeigen = bool(aufgabe["vorschlag_in_ausgabe"])
-    seitenzahl = len(arbeit["seiten"])
-    for nummer, seite in enumerate(arbeit["seiten"], start=1):
-        uebersicht = fehleruebersicht(arbeit["seiten"], eigene) if nummer == seitenzahl else None
-        try:
-            foto, faktor = _foto_laden(speicher.bildpfad(seite["bilddatei"]), vorschlag_zeigen,
-                                       uebersicht)
-        except FOTO_FEHLER as fehler:
-            raise AusgabeFehler(f"Das Foto zu Seite {nummer} der Arbeit {arbeit['kuerzel']} fehlt "
-                                "oder ist nicht lesbar. Das PDF wurde nicht erzeugt.") from fehler
-        kopf = f"{aufgabe['titel']} · Arbeit {arbeit['kuerzel']} · Seite {nummer} von {seitenzahl}"
-        bild = seite_zeichnen(foto, _skaliert(seite["zeichen"], faktor), vorschlag_zeigen, kopf,
-                              uebersicht)
-        foto.close()
-        del foto
-        if max(bild.size) > MAX_KANTE:   # etwa eine übervolle Randspalte
-            bild.thumbnail((MAX_KANTE, MAX_KANTE), Image.LANCZOS)
+    for nummer in range(1, len(arbeit["seiten"]) + 1):
+        bild = _seitenbild(speicher, aufgabe, arbeit, nummer, eigene)
         yield bild
         del bild   # die Seite ist geschrieben; nichts hält sie bis zur nächsten fest
+
+
+def seite_als_vorschau(speicher, seite_id):
+    """Die Seite so, wie sie im PDF erschiene, als JPEG; None, wenn es sie nicht (mehr) gibt.
+
+    Dieselbe Zeichnung wie im PDF: Kopf, Unterstreichungen und Randspalte nur aus den
+    bestätigten Zeichen, auf der letzten Seite die Fehlerübersicht der ganzen Arbeit. Anders
+    als das PDF setzt die Vorschau keine Gesamtbestätigung voraus. Seiten und Zeichen stammen
+    aus einem Lesevorgang. `AusgabeFehler`, wenn das Foto fehlt oder nicht lesbar ist.
+    """
+    seite = speicher.seite(seite_id)
+    arbeit = speicher.arbeit(seite["arbeit_id"]) if seite else None
+    aufgabe = speicher.aufgabe(arbeit["aufgabe_id"]) if arbeit else None
+    nummer = next((platz for platz, s in enumerate(arbeit["seiten"], start=1)
+                   if s["id"] == seite_id), None) if aufgabe else None
+    if nummer is None:
+        return None
+    bild = _seitenbild(speicher, aufgabe, arbeit, nummer, speicher.kuerzel(), "Die Vorschau")
+    puffer = io.BytesIO()
+    bild.save(puffer, "JPEG", quality=JPEG_QUALITAET)
+    bild.close()
+    return puffer.getvalue()
 
 
 def _seite_anhaengen(ziel, bild, titel, erste):

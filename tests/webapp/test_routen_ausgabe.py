@@ -1,11 +1,15 @@
-"""Etappe 3: Routen für PDF-Ausgabe, Stapelübersicht und CSV; Knöpfe in Stapel und Korrektur."""
+"""Etappe 3: Routen für PDF-Ausgabe, Vorschau, Stapelübersicht und CSV; Knöpfe in Stapel und
+Korrektur."""
+import colorsys
+import io
 import re
 
 import pytest
+from PIL import Image
 from werkzeug.http import parse_options_header
 
-from webapp import routen, uebersicht
-from tests.webapp.test_ausgabe import _seitenzahl
+from webapp import ausgabe, routen, uebersicht
+from tests.webapp.test_ausgabe import _bunte, _seitenzahl
 # Die Testhilfen und Vorrichtungen der Etappe 1 gelten unverändert.
 from tests.webapp.test_routen import (  # noqa: F401
     _aufgabe, _bild, _daten, _mit_zeichen, _text, _zeichen, app, client, schein, schlange,
@@ -402,3 +406,145 @@ def test_stand_nennt_bestaetigung_fuer_die_knoepfe(client, speicher):
     stand = client.get(f"/aufgabe/{nr}/stand").get_json()
     assert (stand["gesamt"]["bestaetigt"], stand["gesamt"]["arbeiten"]) == (1, 2)
     assert [a["bestaetigt_am"] is not None for a in stand["arbeiten"]] == [True, False]
+
+
+# --- Vorschau einer Seite -------------------------------------------------------------------
+
+def _vorschau(client, seite_id):
+    """Das Vorschaubild der Seite als RGB-Bild; prüft Status, Art und Zwischenspeicher."""
+    antwort = client.get(f"/seite/{seite_id}/vorschau")
+    assert antwort.status_code == 200
+    assert antwort.mimetype == "image/jpeg"
+    assert antwort.headers["Cache-Control"] == "no-store"
+    bild = Image.open(io.BytesIO(antwort.data))
+    assert bild.format == "JPEG"
+    return bild.convert("RGB")
+
+
+def _farbtoene(bild, kasten=None):
+    """Welche Farben im Bild (oder im Kasten) vorkommen: Teilmenge von {"R", "Z", "Gr"}.
+
+    Das JPEG verwischt die Farben; der Farbton bleibt. Gezählt werden nur kräftige Pixel.
+    """
+    gefunden = set()
+    for x, y in _bunte(bild, kasten):
+        r, g, b = (wert / 255 for wert in bild.getpixel((x, y)))
+        ton = colorsys.rgb_to_hsv(r, g, b)[0] * 360
+        if ton < 25 or ton > 335:
+            gefunden.add("R")
+        elif 190 <= ton <= 235:
+            gefunden.add("Z")
+        elif 265 <= ton <= 305:
+            gefunden.add("Gr")
+    return gefunden
+
+
+def _seiten(speicher, arbeit_id):
+    return [seite["id"] for seite in speicher.arbeit(arbeit_id)["seiten"]]
+
+
+def test_vorschau_liefert_die_seite_wie_im_pdf_als_jpeg(client, speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id = _arbeit(speicher, nr, _zeichen(x=100, y=100, breite=120, hoehe=30, **FEST))
+    stand = speicher.arbeit(arbeit_id)["stand"]
+    bild = _vorschau(client, _seiten(speicher, arbeit_id)[0])
+    # Breiter als das Foto (600 × 400): rechts die Randspalte; höher: Kopf und Fehlerübersicht.
+    assert bild.width == 600 + ausgabe.randbreite(600)
+    assert bild.height > 400 + ausgabe.kopfhoehe(600)
+    assert max(bild.size) <= ausgabe.MAX_KANTE
+    kopf = ausgabe.kopfhoehe(600)
+    assert _farbtoene(bild, (0, kopf, 600, kopf + 400)) == {"R"}          # Unterstreichung
+    assert _farbtoene(bild, (600, kopf, bild.width, kopf + 400)) == {"R"}  # Kürzel am Rand
+    # Die Vorschau ändert nichts an der Arbeit.
+    arbeit = speicher.arbeit(arbeit_id)
+    assert arbeit["stand"] == stand and arbeit["bestaetigt_am"] is not None
+
+
+def test_vorschau_braucht_keine_gesamtbestaetigung_und_zeigt_nur_bestaetigte(client, speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id = _arbeit(
+        speicher, nr, _zeichen(x=100, y=60, breite=120, hoehe=30, **FEST),
+        _zeichen(kategorie="Z", x=100, y=160, breite=120, hoehe=30),                 # offen
+        _zeichen(kategorie="Gr", x=100, y=260, breite=120, hoehe=30, status="verworfen"),
+        bestaetigen=False)
+    assert speicher.arbeit(arbeit_id)["bestaetigt_am"] is None
+    assert client.get(f"/arbeit/{arbeit_id}/pdf").status_code == 409
+    seite_id = _seiten(speicher, arbeit_id)[0]
+    assert _farbtoene(_vorschau(client, seite_id)) == {"R"}
+    # Wird der offene Vorschlag bestätigt, erscheint er; ein verworfener nie.
+    offen = next(z for z in speicher.arbeit(arbeit_id)["seiten"][0]["zeichen"]
+                 if z["status"] == "offen")
+    assert client.post(f"/zeichen/{offen['id']}/bestaetigen").status_code == 200
+    assert _farbtoene(_vorschau(client, seite_id)) == {"R", "Z"}
+    assert speicher.arbeit(arbeit_id)["bestaetigt_am"] is None
+
+
+def test_vorschau_ohne_bestaetigte_zeichen_ist_unmarkiert(client, speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id = _arbeit(speicher, nr, _zeichen(x=100, y=60, breite=120, hoehe=30),
+                        bestaetigen=False)
+    bild = _vorschau(client, _seiten(speicher, arbeit_id)[0])
+    assert bild.width > 600 and not _bunte(bild)
+
+
+def test_vorschau_der_letzten_seite_traegt_die_fehleruebersicht_der_arbeit(client, speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id = _arbeit(speicher, nr, _zeichen(x=100, y=60, breite=120, hoehe=30, **FEST),
+                        seitenzahl=2, bestaetigen=False)
+    erste, letzte = (_vorschau(client, seite_id) for seite_id in _seiten(speicher, arbeit_id))
+    assert erste.width == letzte.width
+    assert erste.height == ausgabe.kopfhoehe(600) + 400
+    assert letzte.height > erste.height
+    # Das Zeichen steht auf Seite 1; auf Seite 2 nennt es nur die Übersicht unter dem Foto.
+    unter_dem_foto = ausgabe.kopfhoehe(600) + 400
+    assert not _bunte(letzte, (0, 0, letzte.width, unter_dem_foto))
+    assert _farbtoene(letzte, (0, unter_dem_foto, letzte.width, letzte.height)) == {"R"}
+
+
+def test_vorschau_folgt_der_einstellung_richtige_schreibung_zeigen(client, speicher):
+    nr = _aufgabe(speicher, vorschlag_in_ausgabe=True)
+    arbeit_id = _arbeit(speicher, nr, _zeichen(**FEST), bestaetigen=False)
+    bild = _vorschau(client, _seiten(speicher, arbeit_id)[0])
+    assert bild.width == 600 + ausgabe.randbreite(600, True) > 600 + ausgabe.randbreite(600)
+
+
+def test_vorschau_haelt_die_lange_kante_ein(client, speicher):
+    nr = _aufgabe(speicher)
+    seite_id, = speicher.arbeit_anlegen(nr, [("gross.jpg", _bild((2000, 3000)))])
+    _mit_zeichen(speicher, seite_id, _zeichen(x=400, y=400, breite=300, hoehe=80, **FEST))
+    bild = _vorschau(client, seite_id)
+    assert max(bild.size) <= ausgabe.MAX_KANTE and bild.height > bild.width
+    assert _farbtoene(bild) == {"R"}
+
+
+def test_vorschau_einer_unbekannten_seite_ergibt_404(client, speicher):
+    antwort = client.get("/seite/999/vorschau")
+    assert antwort.status_code == 404 and "Korrektor" in _text(antwort)
+    assert ausgabe.seite_als_vorschau(speicher, 999) is None
+
+
+@pytest.mark.parametrize("defekt", [False, True])
+def test_vorschau_mit_fehlendem_oder_defektem_foto_ergibt_500(client, speicher, defekt):
+    nr = _aufgabe(speicher)
+    arbeit_id = _arbeit(speicher, nr, bestaetigen=False)
+    seite = speicher.arbeit(arbeit_id)["seiten"][0]
+    pfad = speicher.bildpfad(seite["bilddatei"])
+    if defekt:
+        pfad.write_bytes(b"kein Bild")
+    else:
+        pfad.unlink()
+    text = _ist_fehlerseite(client.get(f"/seite/{seite['id']}/vorschau"), 500)
+    assert "Foto" in text and "Die Vorschau wurde nicht erzeugt" in text
+    assert f'href="/arbeit/{arbeit_id}"' in text
+
+
+def test_vorschau_lehnt_fremden_host_und_fremde_herkunft_ab(client, speicher):
+    nr = _aufgabe(speicher)
+    arbeit_id = _arbeit(speicher, nr, bestaetigen=False)
+    url = f"/seite/{_seiten(speicher, arbeit_id)[0]}/vorschau"
+    assert client.get(url).status_code == 200
+    for host in ("boese.example", "localhost.boese.example:5001", "192.168.0.7:5001"):
+        antwort = client.get(url, headers={"Host": host})
+        assert antwort.status_code == 403 and antwort.mimetype != "image/jpeg"
+    assert client.post(url, headers={"Origin": "http://boese.example"}).status_code == 403
+    assert client.post(url).status_code == 405
