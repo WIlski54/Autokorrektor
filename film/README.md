@@ -44,16 +44,29 @@ Das dauert etwa sechs Minuten (Aufnahme in Echtzeit, danach der Schnitt). Es ent
   (`webapp/analyse.py` mit dem Kategorienfilter der Aufgabe), nur der Aufruf von Gemini
   Carbon ist ersetzt. Er gibt nach vier bis sieben Sekunden das früher erzeugte Ergebnis aus
   `ergebnisse/gemini/` zurück. Es geht nichts an einen KI-Dienst.
-- Der Mauszeiger, der Ring beim Klicken und die Anzeige der gedrückten Taste am unteren
-  Bildrand sind Einblendungen des Filmskripts, nicht Teil der App. Die Schrift der App ist
-  für den Beamer von 16 auf 20 Pixel vergrößert (`SCHRIFT_PX`).
-- Das ausgegebene PDF zeigt der Film im eingebauten PDF-Betrachter von Chromium: Die
-  Film-Instanz liefert die eben heruntergeladene Datei über eine eigene Adresse aus
-  (`PDF_WEG = "betrachter"`). Mit `PDF_WEG = "bild"` erscheint stattdessen eine schlichte
-  Seite, die die Seiten des PDF als Bild darstellt.
+- Der Mauszeiger, der Ring beim Klicken und die Anzeige der gedrückten Taste oben in der
+  Kopfleiste sind Einblendungen des Filmskripts, nicht Teil der App.
+- Für den Beamer ist die **Darstellung vergrößert**, allein über eingespieltes CSS
+  (`FILM_CSS`); der Code der App bleibt unberührt. Die Grundschrift ist von 16 auf 20 Pixel
+  (Korrekturansicht, `SCHRIFT_KORREKTUR`) und auf 24 Pixel (alle anderen Seiten,
+  `SCHRIFT_SEITEN`) gesetzt. Formular, Kacheln, Vorschaukarten und die Tabellen der
+  Stapelübersicht nutzen die Breite; die Vorschaubilder werden dafür in 900 statt 300 Pixeln
+  Breite geholt. Die Dialoge sind etwa 960 Pixel breit, die Fußleiste der Korrekturansicht
+  bleibt einzeilig.
+- Die aufgeklappte Liste eines Auswahlfelds erscheint in der Aufnahme nicht. Beim Kürzel des
+  eigenen Zeichens zeigt der Film darum nur: Zeiger auf dem Feld, Fokusrahmen, dann der neue
+  Wert.
+- Das ausgegebene PDF zeigt der Film im eingebauten PDF-Betrachter von Chromium, die ganze
+  Seite im Fenster (`#view=Fit`): Die Film-Instanz liefert die eben heruntergeladene Datei
+  über eine eigene Adresse aus (`PDF_WEG = "betrachter"`). Mit `PDF_WEG = "bild"` erscheint
+  stattdessen eine schlichte Seite, die die Seiten des PDF als Bild darstellt.
 
 ## Anpassen
 
 Das Drehbuch steht in der Funktion `drehen`, Titel und Untertitel der Kapitel in `KAPITEL`.
 Pausen sind in Sekunden angegeben (`r.pause(…)`); `r.marke("name")` merkt eine Stelle für ein
 Standbild vor.
+
+Zum Prüfen der Gestaltung gibt es einen **Probelauf**: Mit der Umgebungsvariablen
+`FILM_PROBE=1` läuft das Drehbuch mit kurzen Pausen in knapp zwei Minuten durch, ohne
+Schnitt; an jeder gemerkten Stelle entsteht ein Bildschirmfoto in `film/ausgabe/probe/`.

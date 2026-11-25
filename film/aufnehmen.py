@@ -34,7 +34,16 @@ ADRESSE, PORT = "127.0.0.1", 5002
 BASIS = f"http://{ADRESSE}:{PORT}"
 BREITE, HOEHE, BILDRATE = 1920, 1080, 30
 TEMPO = 0.88             # Faktor für die Pausen zwischen den Handgriffen (kleiner = zügiger)
-SCHRIFT_PX = 20          # Grundschrift der App im Film (sonst 16): lesbar auf dem Beamer
+# Grundschrift der App im Film (sonst 16), damit sie auf dem Beamer lesbar ist: die schmalen
+# Seiten (Listen, Formular, Hochladen, Stapel, Übersicht) größer als die Korrekturansicht,
+# die die ganze Bildbreite nutzt.
+SCHRIFT_SEITEN = 24
+SCHRIFT_KORREKTUR = 20
+VORSCHAUBREITE = 900     # Breite der Vorschaubilder in Karten und Kacheln (die App fragt 300 an)
+# Probelauf (Umgebungsvariable FILM_PROBE=1): kurze Pausen, kein Schnitt; an jeder gemerkten
+# Stelle entsteht ein Bildschirmfoto in film/ausgabe/probe/. Zum Prüfen der Gestaltung.
+PROBE = os.environ.get("FILM_PROBE") == "1"
+PROBEBILDER = AUSGABE / "probe"
 # "betrachter": das PDF im eingebauten PDF-Betrachter von Chromium zeigen (braucht den
 # vollen Browser); "bild": eine schlichte Seite mit den Seiten des PDF als Bild.
 PDF_WEG = "betrachter"
@@ -221,6 +230,43 @@ def server_starten(app):
 
 # --- Einblendungen im Browser: Zeiger, Klick-Ring, Tastenanzeige ------------------------------
 
+# Gestaltung nur für den Film; am Code der App ändert sich nichts. Die Auswahl beginnt mit
+# `body`, damit sie den Regeln der App vorgeht, gleich an welcher Stelle sie eingefügt wird.
+FILM_CSS = """
+    html { font-size: __SEITEN__px !important; }
+    html:has(body.korrektur) { font-size: __KORREKTUR__px !important; }
+    body .inhalt { max-width: __INHALT__px; }
+    /* schmale Seiten: die Breite nutzen */
+    body .formular { max-width: none; }
+    body .kacheln { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    body .kachelbild img { height: 15rem; }
+    body #reihe .karte { width: 11.5rem; }
+    body #reihe .karte img { height: 14rem; }
+    body .tabelle.schmal { width: 100%; }
+    body .zahlkarten .zahlkarte { flex: 1 1 0; }
+    /* Korrekturansicht: Fußleiste einzeilig, auch mit dem Hinweis „Rahmen im Bild aufziehen“ */
+    body.korrektur .fussleiste.korrekturleiste { flex-wrap: nowrap; gap: .6rem; font-size: .88rem;
+      white-space: nowrap; }
+    body.korrektur .korrekturleiste .leistenteil { flex-wrap: nowrap; gap: .45rem; }
+    body.korrektur .korrekturleiste .knopf { padding: .5rem .8rem; }
+    body.korrektur .korrekturleiste .leise,
+    body.korrektur .korrekturleiste .setzen-hinweis { font-size: .84rem; }
+    /* Vorschau: der Hinweis über dem Bild kostet Höhe; das Bildfeld gibt sie ab, damit die
+       Tastenlegende nicht hinter die Fußleiste rutscht */
+    body.korrektur .bildspalte:has(#vorschau-hinweis:not([hidden])) .rollfeld {
+      max-height: calc(100vh - 25.1rem); }
+    /* die Dialoge groß und mittig */
+    body dialog.dialog { width: 960px; max-width: calc(100vw - 2rem); padding: 2.4rem 2.6rem;
+      font-size: 1.45rem; }
+    body dialog.dialog h2 { font-size: 1.9rem; margin-bottom: 1.2rem; }
+    body dialog.dialog p { margin-bottom: 1.1rem; }
+    body dialog.dialog .leise { font-size: 1.25rem; }
+    body dialog.dialog .zahlenliste { margin-bottom: 1.5rem; }
+    body dialog.dialog .zahlenliste div { padding: .6rem 1.2rem; }
+    body dialog.dialog .knopfreihe { margin-top: 1.8rem; gap: 1rem; }
+    body dialog.dialog .knopf { padding: .7rem 1.5rem; min-height: 3.4rem; }
+"""
+
 INIT_SKRIPT = r"""
 (() => {
   if (window.__film) { return; }
@@ -243,15 +289,16 @@ INIT_SKRIPT = r"""
       animation: film-ring .55s ease-out forwards; }
     @keyframes film-ring { from { transform: scale(.6); opacity: .95; }
                            to { transform: scale(3.6); opacity: 0; } }
-    #film-taste { position: fixed; left: 50%; bottom: 38px; transform: translateX(-50%);
-      display: flex; align-items: center; gap: 18px; padding: 14px 28px 14px 16px;
-      background: rgba(31,35,40,.93); color: #fff; border-radius: 16px;
-      font: 600 30px/1.2 system-ui, "Segoe UI", sans-serif; white-space: nowrap;
-      box-shadow: 0 6px 24px rgba(0,0,0,.35); opacity: 0; transition: opacity .18s; }
+    /* die gedrückte Taste: oben in der Kopfleiste, wo sie nichts von der App überdeckt */
+    #film-taste { position: fixed; left: 50%; top: 5px; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 16px; padding: 8px 26px 8px 10px;
+      background: rgba(31,35,40,.95); color: #fff; border-radius: 14px;
+      font: 600 28px/1.2 system-ui, "Segoe UI", sans-serif; white-space: nowrap;
+      box-shadow: 0 3px 12px rgba(0,0,0,.3); opacity: 0; transition: opacity .18s; }
     #film-taste.an { opacity: 1; }
-    #film-taste kbd { min-width: 52px; padding: 6px 14px; text-align: center; background: #fff;
-      color: #1f2328; border-radius: 9px; border-bottom: 5px solid #b9bec6;
-      font: 700 32px/1.2 system-ui, "Segoe UI", sans-serif; }
+    #film-taste kbd { min-width: 50px; padding: 3px 14px; text-align: center; background: #fff;
+      color: #1f2328; border: 0; border-radius: 8px; border-bottom: 4px solid #b9bec6;
+      font: 700 30px/1.2 system-ui, "Segoe UI", sans-serif; }
   `;
   const ebene = document.createElement('div');
   ebene.id = 'film-ebene';
@@ -350,10 +397,19 @@ class Regie:
 
     def pause(self, sekunden, fest=False):
         """Wartet; `fest` nimmt die Pause vom allgemeinen Tempo aus (Karten, Dialoge)."""
+        if PROBE:
+            sekunden = min(sekunden, 0.3)
         self.page.wait_for_timeout(int(sekunden * (1 if fest else TEMPO) * 1000))
 
     def marke(self, name):
         self.marken.append((f"k{self.nummer:02d}-{name}", self.jetzt()))
+        if PROBE:
+            self.page.wait_for_timeout(350)
+            ziel = PROBEBILDER / f"{len(self.marken):02d}-k{self.nummer:02d}-{name}.jpg"
+            try:
+                self.page.screenshot(path=str(ziel), type="jpeg", quality=88, timeout=8000)
+            except Exception as fehler:   # etwa im PDF-Betrachter
+                print(f"  kein Probebild für {name}: {fehler}", flush=True)
 
     # --- Maus -------------------------------------------------------------------------------
 
@@ -364,6 +420,8 @@ class Regie:
             return
         if dauer is None:
             dauer = min(1.4, max(0.4, 0.3 + weg / 1300))
+        if PROBE:
+            dauer *= 0.3
         schritte = max(6, int(dauer * 60))
         for i in range(1, schritte + 1):
             t = i / schritte
@@ -381,7 +439,7 @@ class Regie:
         element.wait_for(state="visible")
         if not element.evaluate("e => window.__film.frei(e)"):
             element.evaluate("e => e.scrollIntoView({behavior: 'smooth', block: 'center'})")
-            self.pause(0.9)
+            self.page.wait_for_timeout(800)   # das Rollen abwarten, auch im Probelauf
         return element
 
     def mitte(self, ziel, dx=0.5, dy=0.5):
@@ -423,6 +481,17 @@ class Regie:
             rest -= stueck
             time.sleep(1 / 60)
 
+    def rollen_bis(self, ziel, oben=110, tempo=380):
+        """Rollt die Seite weich, bis das Element `oben` Pixel unter dem oberen Rand steht."""
+        weg = self._finden(ziel).evaluate(
+            "(e, oben) => { const d = document.documentElement;"
+            " const w = e.getBoundingClientRect().top - oben;"
+            " return Math.max(-d.scrollTop, Math.min(w, d.scrollHeight - innerHeight - d.scrollTop)); }",
+            oben)
+        if abs(weg) > 2:
+            self.rollen(weg, tempo)
+            self.page.wait_for_timeout(350)   # das Rollen ausklingen lassen
+
     # --- Tastatur ---------------------------------------------------------------------------
 
     def taste(self, taste, kuerzel, text, davor=0.5, danach=1.2):
@@ -452,12 +521,19 @@ class Regie:
             hinter_der_karte()
         self.pause(max(0.2, 3.0 - (self.jetzt() - beginn)), fest=True)
 
-    def auftritt(self, adresse, warten_auf=None):
-        """Die erste Ansicht des Kapitels; sie bleibt etwa zwei Sekunden stehen."""
+    def auftritt(self, adresse, warten_auf=None, mittig=None):
+        """Die erste Ansicht des Kapitels; sie bleibt etwa zwei Sekunden stehen.
+
+        `mittig` nennt ein Element, das gleich (ohne sichtbares Rollen) in die Bildmitte kommt.
+        """
         self.page.goto(BASIS + adresse)
         if warten_auf:
             self.page.locator(warten_auf).first.wait_for(state="visible")
+        if mittig:
+            self.page.locator(mittig).first.evaluate("e => e.scrollIntoView({block: 'center'})")
         self.pause(2.0, fest=True)
+        if PROBE:
+            self.marke("anfang")
 
 
 # --- Drehbuch ---------------------------------------------------------------------------------
@@ -542,7 +618,7 @@ def drehen(page, regie, app, hochladeordner):
 
     # 4 – Analyse
     r.titelkarte()
-    r.auftritt(hochladen, "#reihe .karte")
+    r.auftritt(hochladen, "#reihe .karte", mittig="#reihe")   # so, wie Kapitel 3 endet
     r.zu("#start")
     r.pause(1.2)
     r.druecken()
@@ -624,6 +700,7 @@ def drehen(page, regie, app, hochladeordner):
 
     # ein eigenes Zeichen setzen: Rahmen um „war an“, Kürzel A (Ausdruck)
     r.taste("s", "S", "Zeichen setzen", danach=1.0)
+    r.marke("zeichen-setzen")
     seite = speicher.arbeit(arbeit_id)["seiten"][0]
 
     def lage_lesen():
@@ -653,10 +730,16 @@ def drehen(page, regie, app, hochladeordner):
     r.bewegen(x1, y1)
     r.ziehen(x2, y2, dauer=1.0, danach=0.9)
     page.locator("#neu-formular").wait_for(state="visible")
+    # Die aufgeklappte Liste des Auswahlfelds erscheint in der Aufnahme nicht. Darum: Zeiger auf
+    # das Feld, das Feld bekommt sichtbar den Fokus, dann wechselt der Wert auf „A – Ausdruck“.
     r.zu("#neu-kuerzel", dx=0.4)
-    r.pause(0.8)
+    r.pause(0.5)
+    page.focus("#neu-kuerzel")
+    r.marke("kuerzel-feld")
+    r.pause(1.3)
     page.select_option("#neu-kuerzel", "A")
-    r.pause(1.0)
+    r.marke("kuerzel-gewaehlt")
+    r.pause(1.5)
     r.klick("#neu-vorschlag", danach=0.3, dx=0.4)
     r.tippen("leuchtete")
     r.marke("eigenes-zeichen")
@@ -761,15 +844,12 @@ def drehen(page, regie, app, hochladeordner):
     r.marke("pdf-ausgeben")
     r.pause(1.4)
     if PDF_WEG == "betrachter":
-        page.goto(f"{BASIS}/film/pdf/{name}")
-        r.pause(2.0)
-        r.bewegen(1100, 560)   # im Betrachter gibt es den eingeblendeten Zeiger nicht
+        # ganze Seite im Fenster, ohne die Leiste mit den Miniaturen
+        page.goto(f"{BASIS}/film/pdf/{name}#view=Fit&navpanes=0")
+        r.pause(1.6)
         r.marke("pdf")
-        r.pause(3.4)
-        r.rollen(420, tempo=260)
-        r.marke("pdf-unten")
-        r.pause(3.6)
-        r.rollen(-420, tempo=500)
+        r.pause(6.0, fest=True)
+        r.marke("pdf-ende")
     else:
         page.goto(f"{BASIS}/film/pdfseiten/{arbeit_id}")
         page.wait_for_function(
@@ -804,21 +884,17 @@ def drehen(page, regie, app, hochladeordner):
     r.pause(1.4)
     r.klick(page.locator(".knopfreihe.oben a", has_text="Stapelübersicht"), danach=0.2)
     page.wait_for_url(re.compile(r"/uebersicht$"))
-    r.pause(2.0)
-    r.zu(".zahlkarten", dy=0.5)
+    r.pause(1.6)
+    r.zu(".zahlkarten", dx=0.75, dy=1.25)
     r.marke("fehlerarten")
-    r.pause(3.0)
-    weg = page.evaluate("document.documentElement.scrollHeight - innerHeight")
-    if weg > 0:
-        r.rollen(weg * 0.5, tempo=380)
-    r.zu("#woerter-titel", dx=0.6, dy=2.5)
+    r.pause(3.6)
+    # ruhig durch die Seite: Fehlerwörter, dann die Tabelle je Arbeit
+    r.rollen_bis("#woerter-titel", oben=70, tempo=300)
     r.marke("fehlerwoerter")
-    r.pause(3.4)
-    if weg > 0:
-        r.rollen(weg * 0.5 + 20, tempo=380)
-    r.zu("#arbeiten-titel + table", dx=0.5, dy=1.25)
+    r.pause(3.8)
+    r.rollen_bis("#arbeiten-titel", oben=330, tempo=300)
     r.marke("tabelle")
-    r.pause(4.0)
+    r.pause(4.2)
     page.goto(f"{BASIS}/film/schluss")
     r.marke("schluss")
     r.pause(4.2, fest=True)
@@ -891,6 +967,10 @@ def main():
     roh_ordner = AUSGABE / "roh"
     if roh_ordner.exists():
         shutil.rmtree(roh_ordner)
+    if PROBE:
+        if PROBEBILDER.exists():
+            shutil.rmtree(PROBEBILDER)
+        PROBEBILDER.mkdir(parents=True)
     app = app_bauen()
     server = server_starten(app)
     auffaelliges = []
@@ -906,9 +986,13 @@ def main():
             viewport={"width": BREITE, "height": HOEHE}, device_scale_factor=1, locale="de-DE",
             record_video_dir=str(roh_ordner), record_video_size={"width": BREITE, "height": HOEHE},
             accept_downloads=True)
-        schrift = (f"html {{ font-size: {SCHRIFT_PX}px !important; }} "
-                   f".inhalt {{ max-width: {round(1180 * SCHRIFT_PX / 16)}px; }}")
-        context.add_init_script(INIT_SKRIPT.replace("__SCHRIFT__", schrift))
+        film_css = (FILM_CSS.replace("__SEITEN__", str(SCHRIFT_SEITEN))
+                    .replace("__KORREKTUR__", str(SCHRIFT_KORREKTUR))
+                    .replace("__INHALT__", str(round(1180 * SCHRIFT_SEITEN / 16))))
+        context.add_init_script(INIT_SKRIPT.replace("__SCHRIFT__", film_css))
+        # Karten und Kacheln sind im Film größer als sonst: die Vorschaubilder schärfer holen.
+        context.route(re.compile(r"[?&]b=300$"), lambda weg: weg.continue_(
+            url=re.sub(r"b=300$", f"b={VORSCHAUBREITE}", weg.request.url)))
         page = context.new_page()
         regie = Regie(page)
         page.on("pageerror", lambda fehler: auffaelliges.append(f"Skriptfehler: {fehler}"))
@@ -924,6 +1008,11 @@ def main():
         roh = Path(video.path())
     server.shutdown()
     app.extensions["warteschlange"].beenden()
+    if PROBE:
+        print(f"Probelauf ohne Schnitt. Bilder: {PROBEBILDER}")
+        for zeile in auffaelliges:
+            print("  " + zeile)
+        return
 
     print("Schnitt …", flush=True)
     film, grenzen = schneiden(roh, regie, ende)
