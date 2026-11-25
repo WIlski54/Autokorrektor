@@ -1,0 +1,2 @@
+# Nur für den Präsentationsfilm (film/aufnehmen.py); die App selbst braucht das nicht.
+playwright

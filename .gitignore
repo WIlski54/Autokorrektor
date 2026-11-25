@@ -27,3 +27,7 @@ daten/
 
 # Probe-Ausgaben bleiben lokal
 ausgabe_probe/
+
+# Präsentationsfilm: Aufnahmen und Daten der Film-Instanz bleiben lokal
+film/ausgabe/
+film/daten_film/
