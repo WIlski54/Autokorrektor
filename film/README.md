@@ -47,8 +47,10 @@ Das dauert etwa sechs Minuten (Aufnahme in Echtzeit, danach der Schnitt). Es ent
 - Der Mauszeiger, der Ring beim Klicken und die Anzeige der gedrückten Taste am unteren
   Bildrand sind Einblendungen des Filmskripts, nicht Teil der App. Die Schrift der App ist
   für den Beamer von 16 auf 20 Pixel vergrößert (`SCHRIFT_PX`).
-- Das ausgegebene PDF zeigt der Film auf einer schlichten Seite der Film-Instanz, die die
-  Seiten des PDF als Bild darstellt (`PDF_WEG` im Skript).
+- Das ausgegebene PDF zeigt der Film im eingebauten PDF-Betrachter von Chromium: Die
+  Film-Instanz liefert die eben heruntergeladene Datei über eine eigene Adresse aus
+  (`PDF_WEG = "betrachter"`). Mit `PDF_WEG = "bild"` erscheint stattdessen eine schlichte
+  Seite, die die Seiten des PDF als Bild darstellt.
 
 ## Anpassen
 

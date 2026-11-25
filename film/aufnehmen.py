@@ -33,10 +33,11 @@ STANDBILDER = AUSGABE / "standbilder"
 ADRESSE, PORT = "127.0.0.1", 5002
 BASIS = f"http://{ADRESSE}:{PORT}"
 BREITE, HOEHE, BILDRATE = 1920, 1080, 30
+TEMPO = 0.88             # Faktor für die Pausen zwischen den Handgriffen (kleiner = zügiger)
 SCHRIFT_PX = 20          # Grundschrift der App im Film (sonst 16): lesbar auf dem Beamer
 # "betrachter": das PDF im eingebauten PDF-Betrachter von Chromium zeigen (braucht den
 # vollen Browser); "bild": eine schlichte Seite mit den Seiten des PDF als Bild.
-PDF_WEG = "bild"
+PDF_WEG = "betrachter"
 
 sys.path.insert(0, str(WURZEL))
 
@@ -223,6 +224,8 @@ def server_starten(app):
 INIT_SKRIPT = r"""
 (() => {
   if (window.__film) { return; }
+  // nur im Hauptfenster und nicht im PDF-Betrachter (der besteht aus mehreren Rahmen)
+  if (window !== window.top || location.pathname.startsWith('/film/pdf/')) { return; }
   const KARTE = location.pathname.startsWith('/film/karte') || location.pathname.startsWith('/film/schluss');
   const stil = document.createElement('style');
   stil.textContent = `
@@ -315,7 +318,7 @@ INIT_SKRIPT = r"""
       if (text) { taste.appendChild(document.createTextNode(text)); }
       taste.classList.add('an');
       clearTimeout(uhr);
-      uhr = setTimeout(() => taste.classList.remove('an'), dauer || 2000);
+      uhr = setTimeout(() => taste.classList.remove('an'), dauer || 2400);
     },
     // Ob das Element ganz im Fenster liegt und an seiner Mitte nicht verdeckt ist.
     frei(element) {
@@ -345,8 +348,9 @@ class Regie:
     def jetzt(self):
         return time.monotonic() - self.null
 
-    def pause(self, sekunden):
-        self.page.wait_for_timeout(int(sekunden * 1000))
+    def pause(self, sekunden, fest=False):
+        """Wartet; `fest` nimmt die Pause vom allgemeinen Tempo aus (Karten, Dialoge)."""
+        self.page.wait_for_timeout(int(sekunden * (1 if fest else TEMPO) * 1000))
 
     def marke(self, name):
         self.marken.append((f"k{self.nummer:02d}-{name}", self.jetzt()))
@@ -446,14 +450,14 @@ class Regie:
         print(f"  Kapitel {self.nummer} – {titel} ({beginn:6.1f} s)", flush=True)
         if hinter_der_karte:
             hinter_der_karte()
-        self.pause(max(0.2, 3.0 - (self.jetzt() - beginn)))
+        self.pause(max(0.2, 3.0 - (self.jetzt() - beginn)), fest=True)
 
     def auftritt(self, adresse, warten_auf=None):
         """Die erste Ansicht des Kapitels; sie bleibt etwa zwei Sekunden stehen."""
         self.page.goto(BASIS + adresse)
         if warten_auf:
             self.page.locator(warten_auf).first.wait_for(state="visible")
-        self.pause(2.0)
+        self.pause(2.0, fest=True)
 
 
 # --- Drehbuch ---------------------------------------------------------------------------------
@@ -615,7 +619,7 @@ def drehen(page, regie, app, hochladeordner):
     # einen Rahmen mit der Maus ein Stück verschieben
     x, y = r.mitte(rahmen("leited"))
     r.bewegen(x, y)
-    r.ziehen(x - 26, y + 12, dauer=0.9, danach=1.3)
+    r.ziehen(x - 16, y + 8, dauer=0.9, danach=1.3)
     r.marke("verschoben")
 
     # ein eigenes Zeichen setzen: Rahmen um „war an“, Kürzel A (Ausdruck)
@@ -633,7 +637,7 @@ def drehen(page, regie, app, hochladeordner):
         return (lage["l"] + bx * lage["b"] / seite["breite"],
                 lage["t"] + by * lage["h"] / seite["hoehe"])
 
-    stelle = (712, 1246, 905, 1338)   # „war an“ in Pixeln des Fotos
+    stelle = (706, 1208, 928, 1304)   # „war an“ in Pixeln des Fotos
     lage = lage_lesen()
     mitte_y = im_fenster(lage, 0, (stelle[1] + stelle[3]) / 2)[1]
     versatz = mitte_y - (lage["oben"] + lage["unten"]) / 2
@@ -689,7 +693,7 @@ def drehen(page, regie, app, hochladeordner):
     r.pause(0.6)
     r.zu("#gesamt-dialog .zahlenliste", dx=0.75, dy=0.5)
     r.marke("dialog-gesamt")
-    r.pause(5.0)
+    r.pause(5.0, fest=True)
     r.klick('#gesamt-dialog button[value="ja"]', davor=0.9, danach=0.3)
     page.locator("#bestaetigt-anzeige").wait_for(state="visible")
     r.pause(0.8)
@@ -706,7 +710,7 @@ def drehen(page, regie, app, hochladeordner):
     r.pause(1.6)
     x, y = r.mitte(rahmen("Baterie"))
     r.bewegen(x, y)
-    r.ziehen(x + 30, y + 14, dauer=0.9, danach=0.3)
+    r.ziehen(x + 18, y + 10, dauer=0.9, danach=0.3)
     page.locator("#bestaetigt-anzeige").wait_for(state="hidden")
     r.pause(1.0)
     r.zu(".blaettern", dx=-0.25, dy=0.5)   # dorthin, wo die Anzeige eben noch stand
@@ -759,13 +763,13 @@ def drehen(page, regie, app, hochladeordner):
     if PDF_WEG == "betrachter":
         page.goto(f"{BASIS}/film/pdf/{name}")
         r.pause(2.0)
-        r.bewegen(960, 560)
+        r.bewegen(1100, 560)   # im Betrachter gibt es den eingeblendeten Zeiger nicht
         r.marke("pdf")
-        r.pause(3.0)
-        r.rollen(1500, tempo=420)
+        r.pause(3.4)
+        r.rollen(420, tempo=260)
         r.marke("pdf-unten")
-        r.pause(3.0)
-        r.rollen(-1500, tempo=900)
+        r.pause(3.6)
+        r.rollen(-420, tempo=500)
     else:
         page.goto(f"{BASIS}/film/pdfseiten/{arbeit_id}")
         page.wait_for_function(
@@ -812,12 +816,12 @@ def drehen(page, regie, app, hochladeordner):
     r.pause(3.4)
     if weg > 0:
         r.rollen(weg * 0.5 + 20, tempo=380)
-    r.zu("#arbeiten-titel", dx=0.6, dy=3.0)
+    r.zu("#arbeiten-titel + table", dx=0.5, dy=1.25)
     r.marke("tabelle")
     r.pause(4.0)
     page.goto(f"{BASIS}/film/schluss")
     r.marke("schluss")
-    r.pause(4.0)
+    r.pause(4.2, fest=True)
     return r.jetzt()
 
 
@@ -895,8 +899,9 @@ def main():
         hochladeordner = Path(temp)
         for foto, name, _ in FOTOS:
             shutil.copyfile(WURZEL / "fotos" / f"{foto}.jpg", hochladeordner / name)
+        # Der volle Browser (neuer Headless-Modus) hat den PDF-Betrachter und deutsche Texte.
         start = {"channel": "chromium"} if PDF_WEG == "betrachter" else {}
-        browser = pw.chromium.launch(headless=True, **start)
+        browser = pw.chromium.launch(headless=True, args=["--lang=de-DE"], **start)
         context = browser.new_context(
             viewport={"width": BREITE, "height": HOEHE}, device_scale_factor=1, locale="de-DE",
             record_video_dir=str(roh_ordner), record_video_size={"width": BREITE, "height": HOEHE},
